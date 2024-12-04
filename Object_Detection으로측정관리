@@ -1,0 +1,640 @@
+import glob
+import pandas as pd
+import numpy as np
+import os
+from numba import jit
+import matplotlib
+matplotlib.use('agg')
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FixedLocator
+import seaborn as sns
+import shutil
+from datetime import datetime
+import datetime as dt
+import selectivesearch
+from ultralytics import YOLO
+import torch
+from io import BytesIO
+import requests
+# from PIL import Image
+from PIL import Image, ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+from torch.utils.data import DataLoader, Dataset
+import torchvision.transforms as transforms
+import tqdm
+import io
+import warnings
+import logging
+from logging.handlers import TimedRotatingFileHandler
+
+import base64
+import win32com.client
+import pythoncom
+import gc
+
+warnings.filterwarnings(action='ignore')
+pd.set_option('mode.chained_assignment',  None) # <==== 경고를 끈다
+
+logger = logging.getLogger(name = 'Data_Matrix_')
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('|%(asctime)s||%(levelname)s|%(message)s',datefmt='%Y-%m-%d %H:%M:%S')
+stream_handler = logging.StreamHandler()
+
+
+file_handler = logging.handlers.TimedRotatingFileHandler(
+    filename= ('C:/Python/Log/Data_Matrix.'+datetime.now().strftime('%Y%m%d')+'Monitoring.log'), 
+    when = "midnight" ,  # W0
+    interval = 1,
+    backupCount= 0 , 
+    #atTime=datetime.time(0, 0, 0)
+    )
+stream_handler.setFormatter(formatter)
+logger.addHandler(stream_handler)
+#file_handler = logging.FileHandler('//tsp-file/TSP2/TD FAB품질/AOI Image 분류 폴더(Test)/'+ dt.datetime.today().strftime('%Y%m%d') +'_Image_classfication.log')
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+logger.info("Start~!!")
+
+def make_list():
+    ML9_Path = '//'
+    ML5_Path = '//'
+    Root_path_list = [ML5_Path,ML9_Path]
+    root_list = []
+    F_list = []
+    for root in Root_path_list:
+        temp_list = glob.glob(root + '*')
+        temp_list = [loc for loc in temp_list if datetime.fromtimestamp(os.path.getctime(loc)) >= datetime.today()-dt.timedelta(hours =8) ]
+        root_list += temp_list
+    for root_lot in root_list:
+        temp = glob.glob(root_lot + '/*.0.0.0.0.*')
+        F_list += temp
+    F_list = [loc for loc in F_list if os.path.getsize(loc) > 0]
+    return F_list
+
+
+def image_process(img_list):
+    model = YOLO('C:/Users/dwchem/Object_Detection/runs/detect/train25/weights/best.pt')
+    list_box = []
+    chunk_size = 100
+    
+    for i in range(0, len(img_list), chunk_size):
+        sublist = img_list[i:i+chunk_size]
+        results = model(sublist)
+        for result in results:
+            result.save(filename='C:/Python/Object_Detection/img_temp/'+result.path.split('\\')[-1])
+            boxes = result.boxes
+            for box in boxes:
+                if img_list[0].split('/')[5].strip() == 'ML9':
+                    offset = 1.5
+                else : 
+                    offset = 2.8                    
+                list_box.append({"File_Loc": result.path, 
+                                 "Meas_Machine": img_list[0].split('/')[5],
+                                 "File_Name" : result.path.split('\\')[-1], 
+                                 "Lot" : result.path.split('\\')[-2],
+                                 "Glass_ID" : result.path.split('\\')[-1].split('.')[0], 
+                                 "R_Position(unit:mm)":str(int(round(float(result.path.split('\\')[-1].split('.')[-4]),-4)/1000))+"/"+str(int(round(float(result.path.split('\\')[-1].split('.')[-3]),-4)/1000)), 
+                                 "Position_X(unit:mm)":str(int(round(float(result.path.split('\\')[-1].split('.')[-4]),-3)/1000)),
+                                 "Position_Y(unit:mm)":str(int(round(float(result.path.split('\\')[-1].split('.')[-3]),-3)/1000)),
+                                 "dx(unit:um)" : round((box.xyxy.cpu().detach().numpy().squeeze()[2] - box.xyxy.cpu().detach().numpy().squeeze()[0])*offset,3),
+                                 "dy(unit:um)" : round((box.xyxy.cpu().detach().numpy().squeeze()[3] - box.xyxy.cpu().detach().numpy().squeeze()[1])*offset,3),
+                                 "px(unit:um)" : round((box.xyxy.cpu().detach().numpy().squeeze()[0])*offset,3),
+                                 "py(unit:um)" : round((box.xyxy.cpu().detach().numpy().squeeze()[1])*offset,3),
+                                 #"px(unit:um)" : round((box.xyxy.cpu().detach().numpy().squeeze()[2] + box.xyxy.cpu().detach().numpy().squeeze()[0])/2,3),
+                                 #"py(unit:um)" : round((box.xyxy.cpu().detach().numpy().squeeze()[3] + box.xyxy.cpu().detach().numpy().squeeze()[1])/2,3),
+                                 'conf':round(box.conf.cpu().detach().numpy().tolist()[0],3),'class':result.names[int(box.cls.cpu().detach().numpy().tolist()[0])],
+                                 "Size(unit:pxl)":result.orig_shape})
+    DM_DF = pd.DataFrame(list_box)
+    
+    routing_info = 'rount정보주소\\merge_recent_df.csv'
+    routing_root = 'rount정보주소'
+    try :
+        os.system('net use * /delete /y')
+        os.system(f'net use {routing_root} /user:dwfc dwfc')
+        routing_info = pd.read_csv(routing_info)    
+        print("읽기 완료")   
+    except Exception as e :
+        logger.error('오류 발생', exc_info = True)
+        pass
+        
+    DM_DF['1L_Photo'] = [routing_info.loc[(routing_info['Lot ID'] == lot)&(routing_info['이전 작업 공정'].isin([pc for pc in routing_info['이전 작업 공정'] if '1P' in pc])),'설비 ID'].tolist() for lot in DM_DF['Lot']]
+    DM_DF['1L_Photo'] = [list(set([pcl for pcl in DM_DF.loc[i, '1L_Photo'] if 'PT' in pcl])) for i in DM_DF.index]    
+    DM_DF['Time'] = [datetime.fromtimestamp(os.path.getctime(loc)).strftime('%y%m%d %H') for loc in DM_DF['File_Loc']]
+    DM_DF=DM_DF[DM_DF['R_Position(unit:mm)'].isin(['-740/620','-740/-30','-20/-60','-20/590','10/620','10/-30','730/-60','730/590'])]
+    DM_DF.reset_index(inplace = True, drop=True)
+    torch.cuda.empty_cache()
+    return DM_DF
+
+def dot_process(DM_DF):
+    temp_dot = DM_DF[DM_DF['class']=='DOT']
+    temp_dot['X_Axis'] = temp_dot['Time'] +'_'+ temp_dot['Glass_ID'].str[:10]
+
+    root = '...\\Data_Matrix'
+    try :
+        os.system('net use * /delete /y')
+        os.system(f'net use {root} /user:dwfc dwfc')
+        temp_dot.to_csv('...\\temp_'+datetime.now().strftime('%y%m%d%H')+'_Dot_Size.csv')
+    except Exception as e :
+        logger.error('오류 발생', exc_info = True)
+        pass
+    
+    
+    #temp_dot.to_csv('C:/Python/Object_Detection/File_temp/temp_'+datetime.now().strftime('%y%m%d%H')+'_Dot_Size.csv')
+    try:
+        dot = pd.read_csv('C:/Python/Object_Detection/File_temp/Dot_Size.csv', index_col=0)
+    except:
+        dot=pd.DataFrame()
+    dot = pd.concat([dot,temp_dot])
+    dot['Time'] = [datetime.strptime(i,'%y%m%d %H') for i in dot['Time']]
+    dot=dot[dot['Time'] > (datetime.today() - dt.timedelta(days=14))]
+    dot['Time'] = [i.strftime('%y%m%d %H') for i in dot['Time']]
+    dot.drop_duplicates(subset=['File_Loc', 'File_Name', 'Lot', 'Glass_ID', 'R_Position(unit:mm)','Position_X(unit:mm)', 'Position_Y(unit:mm)', 'dx(unit:um)','dy(unit:um)', 'px(unit:um)', 'py(unit:um)', 'conf', 'class','Size(unit:pxl)'],inplace=True, keep='first', ignore_index = True)
+    dot.sort_values(by=['Time','Glass_ID'],ignore_index = True, inplace = True)
+    dot.to_csv('C:/Python/Object_Detection/File_temp/Dot_Size.csv')
+    
+    dot_ref = pd.pivot_table(dot, index = ['R_Position(unit:mm)'], values = {'dx(unit:um)':['mean','std'],'dy(unit:um)':['mean','std']}, aggfunc = ['mean','std']).reset_index().T.reset_index()
+    dot_ref['Index'] =  dot_ref['level_0'] + ' '+ dot_ref['level_1']
+    dot_ref.drop(columns = ['level_0','level_1'], inplace=True)
+    dot_ref.set_index(keys = 'Index', drop=True, inplace = True)
+    dot_ref = dot_ref.T
+    dot_ref['UCL_DX'] = dot_ref['mean dx(unit:um)'] + dot_ref['std dx(unit:um)']*3
+    dot_ref['LCL_DX'] = dot_ref['mean dx(unit:um)'] - dot_ref['std dx(unit:um)']*3
+    dot_ref['UCL_DY'] = dot_ref['mean dy(unit:um)'] + dot_ref['std dy(unit:um)']*3
+    dot_ref['LCL_DY'] = dot_ref['mean dy(unit:um)'] - dot_ref['std dy(unit:um)']*3
+    dot_ref.columns=[i.strip() for i in dot_ref.columns]
+
+    dot['1L_Photo'] = dot['1L_Photo'].astype('str')
+    dot_pv_val = pd.pivot_table(dot, index = ['Time','1L_Photo','File_Name','R_Position(unit:mm)'], values = {'dx(unit:um)':['mean'],'dy(unit:um)':['mean']}, aggfunc = ['mean']).reset_index().T.reset_index()
+    dot_pv_val['Index'] =  dot_pv_val['level_0'] + ' '+ dot_pv_val['level_1']
+    dot_pv_val.drop(columns = ['level_0','level_1'], inplace=True)
+    dot_pv_val.set_index(keys = 'Index', drop=True, inplace = True)
+    dot_pv_val = dot_pv_val.T
+    dot_pv_val.columns=[i.strip() for i in dot_pv_val.columns]
+    # dot_pv_val['Judge'] = ["Normal" if ((dot_pv_val.loc[i,'mean dx(unit:um)'] <= dot_ref.loc[dot_ref['R_Position(unit:mm)']==d,'UCL_DX'].values[0])&
+    #                                     (dot_pv_val.loc[i,'mean dx(unit:um)'] >= dot_ref.loc[dot_ref['R_Position(unit:mm)']==d,'LCL_DX'].values[0])&
+    #                                     (dot_pv_val.loc[i,'mean dy(unit:um)'] <= dot_ref.loc[dot_ref['R_Position(unit:mm)']==d,'UCL_DY'].values[0])&
+    #                                     (dot_pv_val.loc[i,'mean dy(unit:um)'] >= dot_ref.loc[dot_ref['R_Position(unit:mm)']==d,'LCL_DY'].values[0])) else "Abnormal"
+    #                        for i, d in enumerate(dot_pv_val['R_Position(unit:mm)'])]
+
+    dot_pv_val['Judge'] = ["Normal" if d > 45 else "Abnormal" for d in dot_pv_val['mean dx(unit:um)']]
+    
+    dot['1L_Photo']=dot['1L_Photo'].astype('str')
+    fig1, ax = plt.subplots(nrows=len(dot['R_Position(unit:mm)'].unique()), ncols =len(dot['1L_Photo'].unique()), figsize = (15,len(dot['R_Position(unit:mm)'].unique())*5),sharex=False)
+    for i,R_Posi in enumerate(dot['R_Position(unit:mm)'].unique()):
+        for j, PT in enumerate(dot['1L_Photo'].unique()):
+            temp = dot[(dot['R_Position(unit:mm)']==R_Posi)&(dot['1L_Photo']==PT)].groupby('X_Axis')['dx(unit:um)'].mean().reset_index()
+            sns.lineplot(data=temp, x='X_Axis', y='dx(unit:um)', ax=ax[i,j])
+            ax[i,j].set_title(f'{PT}_{R_Posi}_Dot_Size', fontsize = 10)
+            ax[i,j].xaxis.set_major_locator(FixedLocator(ax[i,j].get_xticks()[::4]))
+            ax[i,j].set_xticklabels(ax[i,j].get_xticklabels(), rotation=90)  
+            ax[i,j].set_ylim(30,90)  
+            ax[i,j].axhline(y=45, color = 'r', linestyle ='--')
+    
+    plt.tight_layout()
+    fig1.savefig('C:/Python/Object_Detection/img_temp/Dot_Size.jpg',bbox_inches='tight', pad_inches=0, dpi = 96)
+    # plt.show()
+
+    
+    
+    # fig1, ax = plt.subplots(nrows=len(dot['R_Position(unit:mm)'].unique()), ncols =1, figsize = (15,len(dot['R_Position(unit:mm)'].unique())*5),sharex=False)
+    # for i, d in enumerate(dot['R_Position(unit:mm)'].unique()):
+    #     sns.boxplot(dot[dot['R_Position(unit:mm)']==d], x='X_Axis', y = 'dx(unit:um)', ax = ax[i])
+    #     ax[i].set_title(f'{d}_Dot_Size', fontsize = 10)
+    #     ax[i].xaxis.set_major_locator(FixedLocator(ax[i].get_xticks())[::2])
+    #     ax[i].set_xticklabels(ax[i, 0].get_xticklabels(), rotation=90)
+    #     # sns.boxplot(dot[dot['R_Position(unit:mm)']==d], x='X_Axis', y = 'dy(unit:um)', ax = ax[i,1])
+    #     # ax[i,1].set_title(f'{d}_Dot_Size', fontsize = 10)
+    #     # ax[i, 1].xaxis.set_major_locator(FixedLocator(ax[i, 1].get_xticks()))
+    #     # ax[i,1].set_xticklabels(ax[i, 1].get_xticklabels(), rotation=45)
+    # #plt.suptitle("Dot_Size_X_Y_Trend")
+    # plt.tight_layout()
+    # fig1.savefig('C:/Python/Object_Detection/img_temp/Dot_Size.jpg',bbox_inches='tight', pad_inches=0, dpi = 96)
+
+    dot_pv_val['Time'] = [datetime.strptime(i,'%y%m%d %H') for i in dot_pv_val['Time']]
+    dot_pv_val=dot_pv_val[dot_pv_val['Time'] > (datetime.today() - dt.timedelta(hours=8))]
+    Abnormal_list = dot_pv_val.loc[dot_pv_val['Judge'] == 'Abnormal',:]
+    Abnormal_list['Glass_ID'] = Abnormal_list['File_Name'].str[:12]
+    dot_pv_val['Time'] = [i.strftime('%y%m%d %H') for i in dot_pv_val['Time']]
+    
+    return fig1, Abnormal_list
+
+
+
+def DM_process(DM_DF):
+    temp_DM = DM_DF[DM_DF['class'].isin(['DATA_MATRIX','DMS'])&(DM_DF['conf'] >=0.95)]
+    temp_DM['1L_Photo'] = temp_DM['1L_Photo'].astype('str')
+    temp_pivot_table_DM= pd.pivot_table(temp_DM,index = ['Time','File_Loc','File_Name','1L_Photo','Glass_ID','R_Position(unit:mm)','Size(unit:pxl)'], columns=['class'],values = {'px(unit:um)':['sum','count'],'py(unit:um)':['sum','count']}, aggfunc = ['sum','count']).reset_index().T.reset_index()
+    temp_pivot_table_DM['Index'] = temp_pivot_table_DM['level_0'] +' ' + temp_pivot_table_DM['level_1']+' ' + temp_pivot_table_DM['class']
+    temp_pivot_table_DM.drop(columns=['level_0','level_1','class'], inplace = True)
+    temp_pivot_table_DM.set_index('Index',drop =True, inplace = True)
+    temp_pivot_table_DM=temp_pivot_table_DM.T
+    temp_pivot_table_DM['DM_DMS_DX'] = [temp_pivot_table_DM.loc[i,'sum px(unit:um) DATA_MATRIX']-temp_pivot_table_DM.loc[i,'sum px(unit:um) DMS'] if (temp_pivot_table_DM.loc[i,'count px(unit:um) DATA_MATRIX'] == 1.0) & (temp_pivot_table_DM.loc[i,'count px(unit:um) DMS'] == 1.0) else 999999 for i in temp_pivot_table_DM.index]
+    temp_pivot_table_DM['DM_DMS_DY'] = [temp_pivot_table_DM.loc[i,'sum py(unit:um) DATA_MATRIX']-temp_pivot_table_DM.loc[i,'sum py(unit:um) DMS'] if (temp_pivot_table_DM.loc[i,'count py(unit:um) DATA_MATRIX'] == 1.0) & (temp_pivot_table_DM.loc[i,'count py(unit:um) DMS'] == 1.0) else 999999 for i in temp_pivot_table_DM.index]
+    temp_pivot_table_DM.columns = [c.strip() for c in temp_pivot_table_DM.columns]
+    temp_pivot_table_DM = temp_pivot_table_DM[(temp_pivot_table_DM['DM_DMS_DX']!=999999)&(temp_pivot_table_DM['DM_DMS_DY']!=999999)]
+    temp_pivot_table_DM['X_Axis'] = temp_pivot_table_DM['Time'] +'_'+ temp_pivot_table_DM['Glass_ID'].str[:10]
+    temp_pivot_table_DM.reset_index(inplace = True, drop = True)
+    
+    root = '***\\Data_Matrix'
+    try :
+        os.system('net use * /delete /y')
+        os.system(f'net use {root} /user:*** ***')
+        temp_pivot_table_DM.to_csv('***\\temp_'+datetime.now().strftime('%y%m%d%H')+'_DATA_MATRIX.csv')
+    except Exception as e :
+        logger.error('오류 발생', exc_info = True)
+        pass
+    
+    
+    
+    try:
+        DM = pd.read_csv('C:/Python/Object_Detection/File_temp/DATA_MATRIX.csv', index_col=0)
+    except:
+        DM=pd.DataFrame()
+    DM = pd.concat([DM,temp_pivot_table_DM])
+    
+    DM['Time'] = [datetime.strptime(i,'%y%m%d %H') for i in DM['Time']]
+    DM=DM[DM['Time'] > (datetime.today() - dt.timedelta(days=14))]
+    DM['Time'] = [i.strftime('%y%m%d %H') for i in DM['Time']]
+    DM.drop_duplicates(subset=['Time', 'File_Name', 'Glass_ID', 'R_Position(unit:mm)', 'Size(unit:pxl)', 'sum px(unit:um) DATA_MATRIX','sum px(unit:um) DMS', 'sum py(unit:um) DATA_MATRIX','sum py(unit:um) DMS', 'count px(unit:um) DATA_MATRIX',  'count px(unit:um) DMS','count py(unit:um) DATA_MATRIX','count py(unit:um) DMS', 'DM_DMS_DX', 'DM_DMS_DY', 'X_Axis'],inplace=True, keep='first', ignore_index = True)
+    DM.sort_values(by=['Time','Glass_ID'],ignore_index = True, inplace = True)
+    DM['1L_Photo']=DM['1L_Photo'].astype('str')    
+    DM.to_csv('C:/Python/Object_Detection/File_temp/DATA_MATRIX.csv')
+    
+    
+    
+    # DM_CTR=pd.pivot_table(DM,index=['R_Position(unit:mm)'], values={'DM_DMS_DX':['mean','std'],'DM_DMS_DY':['mean','std']}, aggfunc =['mean','std']).reset_index().T.reset_index()
+    # DM_CTR['Index'] = DM_CTR['level_0'] + ' '+ DM_CTR['level_1']
+    # DM_CTR.drop(columns=['level_0','level_1'], inplace = True)
+    # DM_CTR.set_index('Index',drop =True, inplace = True)
+    # DM_CTR=DM_CTR.T
+    # DM_CTR.columns=[i.strip() for i in DM_CTR.columns]
+    # DM_CTR['UCL_DX'] = 9999#DM_CTR['mean DM_DMS_DX'] + DM_CTR['std DM_DMS_DX']*3
+    # DM_CTR['LCL_DX'] = 200#DM_CTR['mean DM_DMS_DX'] - DM_CTR['std DM_DMS_DX']*3
+    # DM_CTR['UCL_DY'] = 700#DM_CTR['mean DM_DMS_DY'] + DM_CTR['std DM_DMS_DY']*3
+    # DM_CTR['LCL_DY'] = 200#DM_CTR['mean DM_DMS_DY'] - DM_CTR['std DM_DMS_DY']*3
+    # DM.reset_index(inplace = True, drop = True)
+    # DM['Judge']=["Normal" if ((DM.loc[i,'DM_DMS_DX'] <= DM_CTR.loc[DM_CTR['R_Position(unit:mm)']==d,'UCL_DX'].values[0])&
+    #                                            (DM.loc[i,'DM_DMS_DX'] >= DM_CTR.loc[DM_CTR['R_Position(unit:mm)']==d,'LCL_DX'].values[0])&
+    #                                            (DM.loc[i,'DM_DMS_DY'] <= DM_CTR.loc[DM_CTR['R_Position(unit:mm)']==d,'UCL_DY'].values[0])&
+    #                                            (DM.loc[i,'DM_DMS_DY'] >= DM_CTR.loc[DM_CTR['R_Position(unit:mm)']==d,'LCL_DY'].values[0])) else "Abnormal" for i, d in enumerate(DM['R_Position(unit:mm)'])]
+    
+
+    DM['Judge']=["Normal" if ((DM.loc[i,'DM_DMS_DX'] <= 9999) & (DM.loc[i,'DM_DMS_DX'] >= 250) & (DM.loc[i,'DM_DMS_DY'] <= 1250) & (DM.loc[i,'DM_DMS_DY'] >= 250)) else "Abnormal" for i in DM.index]
+    
+    fig1, ax = plt.subplots(nrows=len(DM['R_Position(unit:mm)'].unique()), ncols =2*len(DM['1L_Photo'].unique()), figsize = (len(DM['1L_Photo'].unique())*8,len(DM['R_Position(unit:mm)'].unique())*5),sharex=False)
+    for i, R_POS in enumerate(DM['R_Position(unit:mm)'].unique()):
+        for j, PT in enumerate(DM['1L_Photo'].unique()):
+            temp = DM[(DM['R_Position(unit:mm)'] ==R_POS)&(DM['1L_Photo'] ==PT)]
+            sns.boxplot(temp, x='X_Axis', y = 'DM_DMS_DX', ax = ax[i,0+j*2])
+            ax[i,0+j*2].set_title(f'{PT}{R_POS}_Data_Matrix_X_Position', fontsize = 10)
+            ax[i, 0+j*2].xaxis.set_major_locator(FixedLocator(ax[i, 0+j*2].get_xticks()[::4]))
+            ax[i,0+j*2].set_xticklabels(ax[i, 0+j*2].get_xticklabels(), rotation=90)   
+            ax[i,0+j*2].set_ylim(150,1350)
+            ax[i,0+j*2].tick_params(axis='x', labelsize=8)
+            ax[i,0+j*2].axhline(y=250, color = 'r', linestyle ='--')
+            ax[i,0+j*2].axhline(y=1250, color = 'r', linestyle ='--')
+            sns.boxplot(temp, x='X_Axis', y = 'DM_DMS_DY', ax = ax[i,0+j*2+1])
+            ax[i,0+j*2+1].set_title(f'{PT}{R_POS}_Data_Matrix_Y_Position', fontsize = 10)
+            ax[i,0+j*2+1].xaxis.set_major_locator(FixedLocator(ax[i,0+j*2+1].get_xticks()[::4]))
+            ax[i,0+j*2+1].set_xticklabels(ax[i,0+j*2+1].get_xticklabels(), rotation=90)
+            ax[i,0+j*2+1].tick_params(axis='x', labelsize=8)  
+            ax[i,0+j*2+1].set_ylim(150,1350)  
+            ax[i,0+j*2+1].axhline(y=250, color = 'r', linestyle ='--')
+            ax[i,0+j*2+1].axhline(y=1250, color = 'r', linestyle ='--')
+           
+    plt.subplots_adjust(top=0.8)
+    plt.tight_layout()  
+    fig1.savefig('C:/Python/Object_Detection/img_temp/Data_Matrix_Position.jpg',bbox_inches='tight', pad_inches=0, dpi = 96)
+
+    DM['Time'] = [datetime.strptime(i,'%y%m%d %H') for i in DM['Time']]
+    DM=DM[DM['Time'] > (datetime.today() - dt.timedelta(hours=8))]
+    Abnormal_list=DM.loc[DM['Judge']=='Abnormal',:]
+    DM['Time'] = [i.strftime('%y%m%d %H') for i in DM['Time']]
+    
+    return fig1, Abnormal_list
+
+
+
+def DIGIT_process(DM_DF):
+    temp_digit = DM_DF[DM_DF['class']=='DIGIT']
+    temp_digit['Size(unit:pxl)'] =temp_digit['Size(unit:pxl)'].astype('str')
+    temp_digit = temp_digit[temp_digit['Size(unit:pxl)']=='(3000, 6000)']
+
+    
+    root = '...\\Data_Matrix'
+    try :
+        os.system('net use * /delete /y')
+        os.system(f'net use {root} /user:... ...')
+        # temp_digit.to_csv('C:/Python/Object_Detection/File_temp/temp_'+datetime.now().strftime('%y%m%d%H')+'_Digit.csv')    
+        temp_digit.to_csv('...\\temp_'+datetime.now().strftime('%y%m%d%H')+'_Digit.csv')
+    except Exception as e :
+        logger.error('오류 발생', exc_info = True)
+        pass
+
+
+    
+    #temp_digit.to_csv('C:/Python/Object_Detection/File_temp/temp_'+datetime.now().strftime('%y%m%d%H')+'_Digit.csv') 
+    temp_digit['1L_Photo']=temp_digit['1L_Photo'].astype('str')
+    temp_digit_pivot = pd.pivot_table(temp_digit, index = ['Time','1L_Photo','Lot','Glass_ID','File_Name','R_Position(unit:mm)','Size(unit:pxl)'], values = 'class', aggfunc = 'count').reset_index()
+    temp_digit_pivot['X_Axis'] = temp_digit_pivot['Time'] +'_'+ temp_digit_pivot['Glass_ID'].str[:10]
+    
+    fig1, ax = plt.subplots(nrows=int((len(temp_digit_pivot['R_Position(unit:mm)'].unique())/2)+1), ncols =2, figsize = (15,int(len(temp_digit_pivot['R_Position(unit:mm)'].unique())/2)*5),sharex=False)
+    for i,d in enumerate(temp_digit_pivot['R_Position(unit:mm)'].unique()):
+        if i%2==0:
+            sns.boxplot(temp_digit_pivot[temp_digit_pivot['R_Position(unit:mm)'] ==d], x='X_Axis', y = 'class', ax = ax[int(i/2),0])
+            ax[int(i/2),0].set_title(f'{d}_Digit_Count', fontsize = 10)
+            ax[int(i/2),0].xaxis.set_major_locator(FixedLocator(ax[int(i/2),0].get_xticks()))
+            ax[int(i/2),0].set_xticklabels(ax[int(i/2),0].get_xticklabels(), rotation=45)
+        else :
+            sns.boxplot(temp_digit_pivot[temp_digit_pivot['R_Position(unit:mm)'] ==d], x='X_Axis', y = 'class', ax = ax[int(i/2),1])
+            ax[int(i/2),1].set_title(f'{d}_Digit_Count', fontsize = 10)
+            ax[int(i/2),1].xaxis.set_major_locator(FixedLocator(ax[int(i/2),1].get_xticks()))
+            ax[int(i/2),1].set_xticklabels(ax[int(i/2),1].get_xticklabels(), rotation=45)            
+    #plt.suptitle("DIGIT_Cnt")
+    plt.tight_layout()
+    
+    R_Judge = pd.pivot_table(temp_digit_pivot, index = ['R_Position(unit:mm)'], values={'class':['mean','std']},aggfunc = ['mean','std']).reset_index().T.reset_index()
+    R_Judge['Index'] = R_Judge['level_0']+ R_Judge['level_1']
+    R_Judge.drop(columns=['level_0','level_1'],inplace=True)
+    R_Judge.set_index('Index',drop =True, inplace = True)
+    R_Judge = R_Judge.T
+    ab_normal=list(R_Judge.loc[R_Judge['stdclass']!=0.0,'R_Position(unit:mm)'])
+    if len(R_Judge.loc[R_Judge['stdclass']!=0.0,'R_Position(unit:mm)']) > 0:
+        Abnormal_list=temp_digit_pivot.loc[(temp_digit_pivot['R_Position(unit:mm)']==list(R_Judge.loc[R_Judge['stdclass']!=0.0,'R_Position(unit:mm)'])[0]),:]
+    else: 
+        Abnormal_list = pd.DataFrame()      
+    fig1.savefig('C:/Python/Object_Detection/img_temp/DIGIT.jpg',bbox_inches='tight', pad_inches=0, dpi = 96)
+    
+    return fig1,Abnormal_list
+
+
+
+def add_df_img_to_ctt(content, what):
+    img = Image.open('C:/Python/Object_Detection/img_temp/'+what+'.jpg')        
+    ## Image size 가 특정 size 이상인지 판단 하여 분리 여부를 결정 합니다. 
+    if img.size[1] > 1434:
+        ISize2 = img.size[1]//1434+1
+        if ISize2 > 6 :
+            ISize2 = 6
+        for i in range(ISize2):
+            if ((i+1)*1434) <= img.size[1]:
+                globals()['img_t_{}'.format(i)] = img.crop((0,1434*i,img.size[0],1434*(i+1)))
+            else : 
+                globals()['img_t_{}'.format(i)] = img.crop((0,1434*i,img.size[0],img.size[1]))
+            bytearr = io.BytesIO()
+            globals()['img_t_{}'.format(i)].save(bytearr, format="JPEG")
+            imgbytearr = bytearr.getvalue()
+            encoded_image = base64.b64encode(imgbytearr).decode("utf-8")
+            globals()['c_image_for_body{}'.format(i)] = f'<img src="data:image/jpg;base64,{encoded_image}"/>'
+            del globals()['img_t_{}'.format(i)]
+            gc.collect()
+            content += globals()['c_image_for_body{}'.format(i)]
+            
+        del ISize2,i
+        gc.collect()
+    
+    
+    ## Image가 특정 수준 이내이므로 분리 하지 않고 하나로 보냅니다.
+    else :
+        bytearr = io.BytesIO()
+        img.save(bytearr, format="JPEG")
+        imgbytearr = bytearr.getvalue()
+        encoded_image = base64.b64encode(imgbytearr).decode("utf-8")
+        global c_image_for_body0
+        c_image_for_body0 = f'<img src="data:image/jpg;base64,{encoded_image}"/>'      
+        content += c_image_for_body0
+    del   bytearr, imgbytearr, encoded_image,c_image_for_body0
+    gc.collect()
+
+    try:
+        del image_for_body1,image_for_body1
+        gc.collect()
+    except:
+        pass
+
+    try:
+        del image_for_body1,image_for_body2
+        gc.collect()
+    except:
+        pass
+
+    try:
+        del image_for_body1,image_for_body3
+        gc.collect()
+    except:
+        pass
+
+    try:
+        del image_for_body1,image_for_body4
+        gc.collect()
+    except:
+        pass
+
+    try:
+        del image_for_body1,image_for_body5
+        gc.collect()
+    except:
+        pass
+    try:
+        del image_for_body1,image_for_body6
+        gc.collect()
+    except:
+        pass
+        
+        
+    return content
+
+
+def make_df_image(Abnormal_list,subject_condition):
+    n_rows = int(len(Abnormal_list)/2)+1
+    if n_rows > 50:
+        n_rows = 50   
+    fig, axes = plt.subplots(nrows=n_rows, ncols=2, figsize=(14, n_rows*6),subplot_kw={'xticks': [], 'yticks': []})
+    for ax, i in zip(axes.flat,Abnormal_list.index):
+        if subject_condition == 'DM':
+            subject = str(Abnormal_list.loc[i,'1L_Photo']) + '_[Position ' + str(Abnormal_list.loc[i,'R_Position(unit:mm)']) +']_X: '+ str(int(Abnormal_list.loc[i,'DM_DMS_DX'])) +'_Y: '+ str(int(Abnormal_list.loc[i,'DM_DMS_DY']))+ '_' + str(Abnormal_list.loc[i,'Glass_ID'])
+        elif subject_condition == 'DIGIT':
+            subject = str(Abnormal_list.loc[i,'1L_Photo']) + '_[Position ' + str(Abnormal_list.loc[i,'R_Position(unit:mm)'])+ ']_' + str(Abnormal_list.loc[i,'Glass_ID'])
+        else :
+            subject = str(Abnormal_list.loc[i,'1L_Photo']) + '_[Position ' + str(Abnormal_list.loc[i,'R_Position(unit:mm)']) +']_X: '+ str(int(Abnormal_list.loc[i,'mean dx(unit:um)'])) +'_Y: '+ str(int(Abnormal_list.loc[i,'mean dy(unit:um)']))+ '_' + str(Abnormal_list.loc[i,'Glass_ID'])       
+        ax.set_title(subject, fontsize = 10)
+        ax.axis("off")
+        ax.axes.get_xaxis().set_visible(False)
+        ax.axes.get_yaxis().set_visible(False)
+        ax.imshow(plt.imread('C:/Python/Object_Detection/img_temp/'+Abnormal_list.loc[i,"File_Name"]),cmap='gray')
+        
+    fig.savefig('C:/Python/Object_Detection/img_temp/temp_map_sum.jpg',bbox_inches='tight', pad_inches=0, dpi = 96)
+
+    return fig
+
+
+
+def Dot_Size_contents(DM_DF):
+    ab_check = 0
+    fig, ab_list = dot_process(DM_DF)
+    
+    content = '<p style="font-weight:bolder; font-faily:맑은 고딕">' + datetime.now().strftime('%m월 %d일 DATA_Matrix Dot_Size 입니다.') + '</p>'
+    content += '<br>'
+    content += '<p style="font-weight:bolder; font-faily:맑은 고딕">Raw_Data 위치 : \\\\192.168.221.29\\oawicsr\\검사계측파트\\Meas.Insp\\Data_Matrix' + '</p>'
+    content += '<br>'    
+    content += '<p style="font-weight:bolder; font-faily:맑은 고딕">Dot_Size_Trend 입니다.' + '</p>'
+    content += '<br>'
+    content += add_df_img_to_ctt('', 'Dot_Size')
+    if len(ab_list)>0:
+        content += '<br>'  
+        content += '<p style="font-weight:bolder; font-faily:맑은 고딕">이상 Image 입니다. Check 바랍니다.' + '</p>'
+        ab_check += len(ab_list)
+        make_df_image(ab_list,'DOT')
+        content += add_df_img_to_ctt('', 'temp_map_sum')
+    else :
+        pass
+        
+    content += '<br>'
+    content += '<br>' 
+    return content, ab_check
+
+
+def Data_Matrix_Location_contents(DM_DF):
+    ab_check = 0
+    fig, ab_list = DM_process(DM_DF)
+    
+    content = '<p style="font-weight:bolder; font-faily:맑은 고딕">' + datetime.now().strftime('%m월 %d일 DATA_MATRIX_POSITION_Trend 입니다.') + '</p>'
+    content += '<br>'
+    content += '<p style="font-weight:bolder; font-faily:맑은 고딕">Raw_Data 위치 : \\\\192.168.221.29\\oawicsr\\검사계측파트\\Meas.Insp\\Data_Matrix' + '</p>'
+    content += '<br>'    
+    content += '<p style="font-weight:bolder; font-faily:맑은 고딕">DATA_MATRIX_POSITION_Trend 입니다.' + '</p>'
+    content += '<br>'    
+    content += add_df_img_to_ctt('', 'Data_Matrix_Position')
+    if len(ab_list)>0:
+        content += '<br>'  
+        content += '<p style="font-weight:bolder; font-faily:맑은 고딕">이상 Image 입니다. Check 바랍니다.' + '</p>'
+        ab_check += len(ab_list)
+        make_df_image(ab_list,'DM')
+        content += add_df_img_to_ctt('', 'temp_map_sum')
+    else :
+        pass  
+    
+    content += '<br>'
+    content += '<br>'
+    return content, ab_check
+
+
+def DIGIT_Count_contents(DM_DF):
+    ab_check = 0
+    fig, ab_list =DIGIT_process(DM_DF)
+    
+    content = '<p style="font-weight:bolder; font-faily:맑은 고딕">' + datetime.now().strftime('%m월 %d일 DATA_Matrix Summary 입니다.') + '</p>'
+    content += '<br>'
+    content += '<p style="font-weight:bolder; font-faily:맑은 고딕">Raw_Data 위치 : \\\\192.168.221.29\\oawicsr\\검사계측파트\\Meas.Insp\\Data_Matrix' + '</p>'
+    content += '<br>'   
+    content += '<p style="font-weight:bolder; font-faily:맑은 고딕">[참고용]DIGIT_COUNT 입니다.' + '</p>'
+    content += '<br>'
+    content += add_df_img_to_ctt('', 'DIGIT')
+    if len(ab_list)>0:
+        content += '<br>'  
+        content += '<p style="font-weight:bolder; font-faily:맑은 고딕">이상 Image 입니다. Check 바랍니다.' + '</p>'
+        ab_check += len(ab_list)
+        make_df_image(ab_list,'DIGIT')
+        content += add_df_img_to_ctt('', 'temp_map_sum')
+    else :
+        pass  
+    content += '<br>'
+    content += '<br>'
+    return content, ab_check
+
+
+def send_Mail(content,subject_comment,mail_list_file_Name,atch):
+    sender_email = 'nnn@nnn.co.kr'
+    sender_password = 'a12345'
+    
+    
+    #receiver_email = 'chash@dwchem.co.kr'
+    subject = subject_comment
+    body = content
+    
+    SMTP_SERVER = 'mail.nnn.co.kr'
+    SMTP_PORT = 25
+    
+    
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.mime.base import MIMEBase
+    from email.encoders import encode_base64
+    
+    Mlist = pd.read_csv(f'C:/Python/Mail_Receiver_list/{mail_list_file_Name}.csv', encoding = 'CP949')#MarknLayer_Key_regular_Mail
+    Mlist.sort_values("Name",ascending = True, inplace = True,ignore_index = True)
+    Mlist = Mlist.loc[:,'Mail_Address']
+    Mail_address = ''  
+    for i in Mlist.index: 
+        Mail_address+= Mlist.loc[i] +';'
+    
+    message = MIMEMultipart()
+    message['From'] = f"{sender_email}"
+    
+    message['To'] = Mail_address
+    message['Subject'] = subject
+    text = MIMEText(body, 'html')
+    message.attach(text)
+    
+    files = atch
+    
+    for f in files:
+        part = MIMEBase('application','octet-stream')
+        part.set_payload(open(f,'rb').read())
+        encode_base64(part)
+        part.add_header('Content-DisPosition','attachment; filename="%s"' % os.path.basename(f))
+        message.attach(part)
+    
+    for receiver in Mlist:    
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)    
+        server.sendmail(sender_email, receiver, message.as_string())      
+    server.quit()
+
+
+
+
+content, ab_check = Dot_Size_contents(DM_DF)
+subject_comment = ('[Check 필요]' if ab_check >0 else '[특이사항 없음]') + datetime.now().strftime('%m월 %d일 Data_Matrix_Dot_Size 현황[1/3]')
+mail_list_file_Name='AAI_Scratch_send_ALONE'
+atch  =  []#glob.glob('C:/Python/Object_Detection/File_temp/temp_*_Dot_Size.csv')
+send_Mail(content,subject_comment,mail_list_file_Name,atch)#c
+
+content, ab_check = Data_Matrix_Location_contents(DM_DF)
+subject_comment = ('[Check 필요]' if ab_check >0 else '[특이사항 없음]') + datetime.now().strftime('%m월 %d일 Data_Matrix_Location 현황[2/3]')
+mail_list_file_Name='AAI_Scratch_send_ALONE'
+atch  =[]#glob.glob('C:/Python/Object_Detection/File_temp/temp_*_DATA_MATRIX.csv')
+send_Mail(content,subject_comment,mail_list_file_Name,atch)#atch
+
+content, ab_check = DIGIT_Count_contents(DM_DF)
+subject_comment =  ('[Check 필요]' if ab_check >0 else '[특이사항 없음]') + datetime.now().strftime('%m월 %d일 Data_Matrix_Digit 현황[3/3]')
+mail_list_file_Name='AAI_Scratch_send_ALONE'
+atch  =[]#glob.glob('C:/Python/Object_Detection/File_temp/temp_*_Digit.csv')
+send_Mail(content,subject_comment,mail_list_file_Name,atch)#atch
+
+remove_target = glob.glob('C:/Python/Object_Detection/img_temp/*.jpg')
+remove_target +=glob.glob('C:/Python/Object_Detection/File_temp/temp_*.csv')
+
+for target in remove_target:
+    os.remove(target)
+
+
+
+def delete_old_files(folder_path, days=30):
+    import time
+    # 현재 시간
+    now = time.time()
+    
+    # 폴더 내의 모든 파일 확인
+    for filename in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, filename)
+        
+        # 파일인지 확인
+        if os.path.isfile(file_path):
+            # 파일의 마지막 수정 시간 확인
+            file_mtime = os.path.getmtime(file_path)
+            
+            # 파일이 1달(30일) 이상 되었는지 확인
+            if (now - file_mtime) > (days * 86400):  # 86400초 = 1일
+                print(f"Deleting {file_path}")
+                os.remove(file_path)
