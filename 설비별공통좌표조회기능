@@ -1,0 +1,576 @@
+import matplotlib
+matplotlib.use('agg')
+import matplotlib.pyplot as plt
+import seaborn as sns
+import os
+import pandas as pd
+import warnings
+import glob
+from pathlib import Path
+import math
+import time
+import datetime as dt
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+from datetime import datetime
+import torchvision
+from torchvision import models
+import torch
+import torch.nn as nn
+import torchvision.transforms as T
+from torchvision.transforms import ToTensor, Compose
+from torchvision import transforms
+from torch.utils.data import DataLoader, Dataset
+from torchvision.datasets import ImageFolder
+from PIL import Image
+import numpy as np
+import shutil
+import re
+import sys
+import io
+import base64
+import win32com.client
+import cv2
+import pythoncom
+import torch.nn.functional as F
+import logging
+from logging.handlers import TimedRotatingFileHandler
+import gc
+import pymssql
+import warnings
+import traceback
+
+from tqdm import tqdm  # Progress Bar 출력
+# import winsound as sd
+import schedule
+# def beepsound():
+#     fr = 2000    # range : 37 ~ 32767
+#     du = 1000     # 1000 ms ==1second
+#     sd.Beep(fr, du) # winsound.Beep(frequency, duration)
+
+
+warnings.filterwarnings(action='ignore')
+pd.set_option('mode.chained_assignment',  None) # <==== 경고를 끈다
+# %matplotlib inline
+
+
+logger = logging.getLogger(name = 'Image_classfication_Log')
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('|%(asctime)s||%(levelname)s|%(message)s',datefmt='%Y-%m-%d %H:%M:%S')
+stream_handler = logging.StreamHandler()
+
+
+file_handler = logging.handlers.TimedRotatingFileHandler(
+    filename= ('C:\\Python\\Log\\Daily_AAI_Fixed_defect_Search.'+datetime.now().strftime('%Y%m%d')+'_Img_cls.log'), 
+    when = "midnight" ,  # W0
+    interval = 1,
+    backupCount= 0 , encoding='utf-8' 
+    #atTime=datetime.time(0, 0, 0)
+    )
+stream_handler.setFormatter(formatter)
+logger.addHandler(stream_handler)
+#file_handler = logging.FileHandler('\\\\tsp-file\\TSP2\\TD FAB품질\\AOI Image 분류 폴더(Test)\\'+ dt.datetime.today().strftime('%Y%m%d') +'_Image_classfication.log')
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+logger.info("Start~!!")
+
+
+
+M_site_CT1 = '...AI1\\Image\\5T00000'
+
+M_site_CT3 = '...AI3\\Image\\5T00000'
+
+M_site_CT4 = '...AI4\\Image\\5T00000'
+
+M_site_CT5 = '...AI5\\Image\\5T00000'
+
+M_site_CT6 = '...AI6\\Image\\5T00000'
+
+fld_list = [M_site_CT1,M_site_CT3,M_site_CT4,M_site_CT5,M_site_CT6]#M_siste_CT1,M_site_CT3,M_site_CT4,M_site_CT5,M_site_CT6
+
+
+
+class mkDataset(Dataset):
+    def __init__(self, dataset):
+        self.image_path_list = dataset
+        self.index = range(len(dataset))
+        self.transform = img_T
+
+    def __len__(self):
+        return len(self.image_path_list)
+
+
+    def __getitem__(self, idx):
+        img_path = self.image_path_list[idx]
+        img = Image.open(img_path).convert('RGB')
+        img = self.transform(img)
+        #img=img.reshape(img.shape[0],img.shape[1],img.shape[2]) 
+        index = self.index[idx]
+        return img, index
+
+class_dictionary = {0:'Bridge', 1:'Err',2:'Large_B_DF',3:'No_Defect',4:'P_Scratch',5:'Trans_Black_small',6:'V_Scratch',7:'Water',8:'X_Scratch'}
+
+#'Bridge', 'Err', 'Large_B_DF', 'No_Defect', 'P_Scratch', 'S_B_DF', 'V_Scratch', 'Water', 'X_Scratch'
+
+img_T = T.Compose([
+    T.CenterCrop((120,280)),
+    # T.Resize((120,120)),
+    #T.RandomRotation(degrees=(-90,90)),
+    #T.RandomVerticalFlip(p=0.5),
+    #T.RandomHorizontalFlip(p=0.5),
+    #T.ColorJitter(brightness = 0.5),
+    #T.ColorJitter(saturation = 0.5),
+    #
+    T.ToTensor(),
+    # T.Normalize((0.5), (0.5))# T.Normalize([0.5],[0.5])
+])
+
+os.environ['CUDA_DEVICE_ORDER']='PCI_BUS_ID'
+os.environ['CUDA_VISIBLE_DEVICES']='0'
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+print("Device:", device)
+print("Current_cuda_device:", torch.cuda.current_device())
+print("Count_of_using_GPUs:", torch.cuda.device_count())
+
+model = models.resnet18(weights=True)
+num_ftrs = model.fc.in_features
+fc = nn.Linear(num_ftrs, 9)
+model.fc = fc
+model_name = 'C:\\Python\\resnet18-pretrained_AAI_TR_Back'#resnet18-pretrained_AAI_TR_Backresnet18-pretrained_AAI_Mid
+model.load_state_dict(torch.load(f'{model_name}.pth', map_location=device))
+model.eval()
+logger.info("Image_Classification_Setting Done~!!")
+
+def rounting_new():
+    routing_df = pd.read_csv('D:\\measure_routing\\routing.csv',index_col = 0)
+    
+    path = '\\\\192.168.13.33'
+    
+    try :
+        os.system('net use * /delete /y')
+        os.system(f'net use {path} /user:dwfc dwfc')
+        
+    except Exception as e :
+        logger.error('오류 발생', exc_info = True)
+        pass
+        
+    # FAB1 = ...y\\'
+    # FAB2 = '...y2\\'
+    # FAB3 = '...y3\\'
+
+    FAB1 = '...y\\'
+    FAB2 = '...y2\\'
+    FAB3 = '...y3\\'
+    
+    FAB1_ID = glob.glob(FAB1 + 'ML*\\*\\File0\\*\\*\\@*')
+    FAB1_ID += glob.glob(FAB1 + 'FI*\\*\\File0\\*\\*\\@*')
+    
+    FAB2_ID = glob.glob(FAB2 + 'ML*\\*\\File0\\*\\*\\@*')
+    FAB2_ID += glob.glob(FAB2 + 'FI*\\*\\File0\\*\\*\\@*')
+    
+    FAB3_ID = glob.glob(FAB3 + 'ML*\\*\\File0\\*\\*\\@*')
+    FAB3_ID += glob.glob(FAB3 + 'FI*\\*\\File0\\*\\*\\@*')
+    
+    FAB1_Info = []
+    FAB2_Info = []
+    FAB3_Info = []
+    for FID, fab, item in zip([FAB1_ID,FAB2_ID,FAB3_ID],[FAB1_Info,FAB2_Info,FAB3_Info],['routing_df1','routing_df2','routing_df3']):
+        for ID in FID:
+            FAB = ID.split('\\')[3]
+            Line = ID.split('\\')[5]
+            Machine = ID.split('\\')[6]
+            PPID = ID.split('\\')[8]
+            Lot = ID.split('\\')[-2]
+            Sht = ID.split('\\')[-1].split(".")[0].replace('@','')
+            time = ID.split('\\')[-1].split(".")[1][:6]
+            if (len(Sht) == 12) & (len(time) ==6) :
+                fab.append({'Time':time,'FAB':FAB,'Line':Line,'Machine':Machine,'PPID':PPID,'Lot':Lot,'Sht':Sht})
+        globals()[item] = pd.DataFrame(fab)
+    
+    temp = pd.concat([routing_df1,routing_df2,routing_df3])
+    
+    # temp = routing_df[routing_df['Machine'].isin(['PTC', 'REG', 'TPM', 'MA1', 'MI1', 'APS', 'MA2', 'MI2','DCT', 'MI3', 'MI4', 'MAC', 'TP1', 'TP2','MA5', 'MA6', 'MI5'])]
+    routing_df = pd.concat([routing_df,temp])
+    routing_df.reset_index(inplace = True, drop = True)
+    routing_df['FAB']=routing_df['FAB'].str.replace('_real','')
+    routing_df = routing_df[routing_df['Time'] != '']
+    routing_df['Time'] = routing_df['Time'].astype('str')
+    routing_df['Time'] = pd.to_datetime(routing_df['Time'] ,format = '%y%m%d', errors = 'coerce')
+    routing_df = routing_df.dropna(subset = ['Time'])
+    routing_df = routing_df[routing_df['Time'] > (datetime.today() - dt.timedelta(days = 5))]
+    routing_df.drop_duplicates(keep = 'first',inplace = True, ignore_index = True)
+    routing_df['Routing_Machine'] = routing_df['FAB'] +'-'+ routing_df['Line'] +'-'+ routing_df['Machine']
+    routing_df = routing_df[~routing_df['Routing_Machine'].isin(['td1-FIL-AOI','td2-FI2-AOI','td2-FI2-DL2','td3-FI3-AOI'])]
+    routing_df.to_csv('D:\\measure_routing\\routing.csv')
+    return routing_df
+
+try:
+    routing_df= rounting_new()
+    logger.info("Routing_Info_Get_Done~!!")
+except Exception as e :
+    logger.error('오류 발생', exc_info = True)
+    pass
+
+
+def img_file_todf():
+    td_Y = dt.datetime.today().year
+    td_M = dt.datetime.today().month
+    td_D = dt.datetime.today().day    
+    td_H = dt.datetime.today().hour
+    img_lists = []
+    for line in fld_list:
+        img_list = glob.glob(line + '\\*')
+        img_list += glob.glob(line.replace('\\\\192.168.13.33\\','\\\\192.168.221.27\\').replace('_real','history') + '\\*')
+        img_lists +=(img_list)
+    
+    limitT=datetime(td_Y, td_M, td_D, td_H, 00, 00, 000000) - dt.timedelta(hours = 8)
+    # limitT2=datetime(td_Y, td_M, td_D, td_H, 00, 00, 000000) #+ dt.timedelta(days = 7)
+
+    img_list_temp = []
+    for img in img_lists:
+        try: 
+            if (limitT < datetime.fromtimestamp(os.path.getctime(img))) :#< limitT2
+                img_list_temp.append({"lot_fold":img,"Time":datetime.fromtimestamp(os.path.getctime(img)).strftime("%Y%m%d %H%M%S")})
+            else:
+                pass
+        except Exception as e :            
+            logger.error('오류 발생', exc_info = True)
+            pass
+    img_lists = img_list_temp
+    
+    Img_df_info = []
+    logger.info(f'Lot_count:{len(img_lists)}')
+    for lot_fold in img_lists:
+        imgs = glob.glob(lot_fold['lot_fold'] + '\\*')
+        imgs = [img for img in imgs if ("GGGG" not in img) & (".TR." in img)]
+        imgs = [img for img in imgs if os.path.getsize(img) >0 ]
+        dataset = mkDataset(imgs)
+        dataloader = DataLoader(dataset, batch_size = 128, num_workers=0, shuffle = False)
+        preds = []
+        pred_ratio = []
+        model.to('cuda')
+        for img, idx in tqdm(dataloader): # tqdm(dataloader)
+            try:
+                img = img.to('cuda')
+                outputs = model(img)
+                predicted = torch.argmax(outputs, dim =1).detach().cpu().tolist()
+                predicted_ratio = F.softmax(outputs, dim =1).detach().cpu().tolist()
+                predicted_ratio = [max(lst) for lst in predicted_ratio]
+                idx = idx.detach().cpu().tolist()
+                Img_df_info += ([{"Time":lot_fold['Time'],"Loc":imgs[i],"Pred":predicted[idx.index(i)],"Pred_Ratio":predicted_ratio[idx.index(i)]} for i in idx])
+                # p_idx.extend(idx)
+                # pred_ratio.extend(predicted_ratio)
+                # preds.extend(predicted)
+            except Exception as e :
+                logger.info(f"오류 Image : {imgs}")
+                logger.error('오류 발생', exc_info = True)
+                pass
+    
+    
+    img_df =  pd.DataFrame(Img_df_info)
+    img_df['Pred'] = [class_dictionary[i] for i in img_df['Pred']]
+    img_df = img_df[img_df['Pred'].isin(['Large_B_DF','P_Scratch','Trans_Black_small','V_Scratch','X_Scratch'])]
+    img_df['F_Name'] = [i.split('\\')[-1] for i in img_df['Loc']]
+    img_df['Lot'] = [i.split('.')[0][:10] for i in img_df['F_Name']]
+    img_df['ID'] = [i.split('.')[0] for i in img_df['F_Name']]
+    img_df['Cell_No']  = [i.split('.')[2] for i in img_df['F_Name']]
+    # img_df['Pred'] = [class_dictionary[i] for i in img_df['Pred']]
+    img_df['IDX'] = [i.split('.')[3] for i in img_df['F_Name']]
+    img_df['X'] = [i.split('.')[5] for i in img_df['F_Name']]
+    img_df['Y'] = [i.split('.')[6] for i in img_df['F_Name']]
+    img_df.reset_index(inplace = True, drop = True)
+
+    return img_df
+
+def fixed_df_graph(img_df, contents):
+    graph_df = pd.DataFrame()
+    for mchn in routing_df['Routing_Machine'].unique():
+        try : 
+            raw = pd.read_csv(f'D:\\Temp_file\\Daily_CUT_AAI_Scratch_Search_Machine\\{mchn}.csv', index_col = 0)
+        except:
+            raw = pd.DataFrame()
+
+        try : 
+            ref_raw = pd.read_csv(f'D:\\Temp_file\\Daily_CUT_AAI_Scratch_Search_Machine\\ref_{mchn}.csv', index_col = 0)
+        except:
+            ref_raw = pd.DataFrame()
+        temp = img_df[img_df['ID'].isin(routing_df.loc[routing_df["Routing_Machine"] == mchn, "Sht"])]
+        temp['Machine_Time'] = [routing_df.loc[routing_df['Sht'] == ID, 'Time'].values[0] for ID in temp['ID']]
+        temp['Machine_Time'] = pd.to_datetime(temp['Machine_Time'])
+
+        ref_temp = img_df[(img_df['Lot'].isin(routing_df.loc[routing_df["Routing_Machine"] == mchn, "Lot"]))& ~(img_df['ID'].isin(routing_df.loc[routing_df["Routing_Machine"] == mchn, "Sht"]))]
+        ref_temp['Machine_Time'] = [routing_df.loc[routing_df['Lot'] == ID, 'Time'].values[0] for ID in ref_temp['Lot']]
+        ref_temp['Machine_Time'] = pd.to_datetime(ref_temp['Machine_Time'])
+
+        
+        raw = pd.concat([raw, temp])
+        # raw = raw[raw['Pred'].isin(['Large_B_DF','P_Scratch','Trans_Black_small','V_Scratch','X_Scratch'])]
+        raw['Time'] = raw['Time'].astype('str')
+        raw['Time'] = [dt.datetime.strptime(t,'%Y-%m-%d %H:%M:%S') if (len(t) == 19) else dt.datetime.strptime(t,'%Y%m%d %H%M%S') for t in raw['Time']]
+        raw = raw[raw['Time'] > dt.datetime.today() - dt.timedelta(days =5)]
+        raw.drop_duplicates(subset='Loc',keep='last',inplace = True, ignore_index = True)
+        raw.to_csv(f'D:\\Temp_file\\Daily_CUT_AAI_Scratch_Search_Machine\\{mchn}.csv')
+
+        ref_raw = pd.concat([ref_raw, ref_temp])
+        # raw = raw[raw['Pred'].isin(['Large_B_DF','P_Scratch','Trans_Black_small','V_Scratch','X_Scratch'])]
+        ref_raw['Time'] = ref_raw['Time'].astype('str')
+        ref_raw['Time'] = [dt.datetime.strptime(t,'%Y-%m-%d %H:%M:%S') if (len(t) == 19) else dt.datetime.strptime(t,'%Y%m%d %H%M%S') for t in ref_raw['Time']]
+        ref_raw = ref_raw[ref_raw['Time'] > dt.datetime.today() - dt.timedelta(days =5)]
+        ref_raw.drop_duplicates(subset='Loc',keep='last',inplace = True, ignore_index = True)
+        ref_raw.to_csv(f'D:\\Temp_file\\Daily_CUT_AAI_Scratch_Search_Machine\\ref_{mchn}.csv')
+
+
+        
+        defect_thres = 10
+        
+        if "AO" in mchn:
+            if len(raw) > 1:
+                raw['Time'] = pd.to_datetime(raw['Time'])
+                # temp['Machine_Time'] = temp['Machine_Time'].astype('int')
+                # raw['Machine_Time'] = pd.to_datetime(raw['Machine_Time'] ,format = '%y%m%d')
+                raw['X'] = raw['X'].astype('float')/1000
+                raw['Y'] = raw['Y'].astype('float')/1000
+                raw['Machine_Time'] = raw['Machine_Time'].astype('str')
+                raw['Machine_Time'] = [dt.datetime.strptime(t,'%Y-%m-%d %H:%M:%S') if (len(t) == 19) else dt.datetime.strptime(t,'%Y-%m-%d') for t in raw['Machine_Time']]
+    
+                time_offset = 4
+                dist_offset = 1
+                raw['ID_Cnt'] = [len(raw.loc[(raw['ID']!=raw.loc[i,'ID'])&(raw['Machine_Time']>(raw.loc[i,'Machine_Time']-dt.timedelta(days=time_offset)))&(raw['Machine_Time']  < (raw.loc[i,'Machine_Time'] + dt.timedelta(days = time_offset))),'ID'].unique()) for i in raw.index]       
+                raw['DF_Ratio'] = [len(raw.loc[((raw['X'] < (raw.loc[i,'X'] +300)) & (raw['X'] > (raw.loc[i,'X'] - 300))) &
+                                                 ((raw['Y'] < (raw.loc[i,'Y'] +dist_offset)) & (raw['Y'] > (raw.loc[i,'Y'] - dist_offset))) &
+                                                 (raw['ID'] != raw.loc[i,'ID']) & (raw['Pred'] == raw.loc[i,'Pred'])&(raw['Machine_Time']  > (raw.loc[i,'Machine_Time'] - dt.timedelta(days = time_offset)))&
+                                                 (raw['Machine_Time']  < (raw.loc[i,'Machine_Time'] + dt.timedelta(days = time_offset))),'ID'].unique())/
+                                   len(raw.loc[(raw['ID']!=raw.loc[i,'ID'])&(raw['Machine_Time']>(raw.loc[i,'Machine_Time']-dt.timedelta(days=time_offset)))&(raw['Machine_Time']  < (raw.loc[i,'Machine_Time'] + dt.timedelta(days = time_offset))),'ID'].unique()) for i in raw.index]
+        
+                raw['DF_Ratio(%)'] = (raw['DF_Ratio']*100).astype('int')
+
+                ####################################################################
+                ref_raw['Time'] = pd.to_datetime(ref_raw['Time'])
+                # temp['Machine_Time'] = temp['Machine_Time'].astype('int')
+                # raw['Machine_Time'] = pd.to_datetime(raw['Machine_Time'] ,format = '%y%m%d')
+                ref_raw['X'] = ref_raw['X'].astype('float')/1000
+                ref_raw['Y'] = ref_raw['Y'].astype('float')/1000
+                ref_raw['Machine_Time'] = ref_raw['Machine_Time'].astype('str')
+                ref_raw['Machine_Time'] = [dt.datetime.strptime(t,'%Y-%m-%d %H:%M:%S') if (len(t) == 19) else dt.datetime.strptime(t,'%Y-%m-%d') for t in ref_raw['Machine_Time']]
+    
+                time_offset = 4
+                dist_offset = 1
+                ref_raw['ID_Cnt'] = [len(ref_raw.loc[(ref_raw['ID']!=ref_raw.loc[i,'ID'])&(ref_raw['Machine_Time']>(ref_raw.loc[i,'Machine_Time']-dt.timedelta(days=time_offset)))&(ref_raw['Machine_Time']  < (ref_raw.loc[i,'Machine_Time'] + dt.timedelta(days = time_offset))),'ID'].unique()) for i in ref_raw.index]       
+                ref_raw['DF_Ratio'] = [len(ref_raw.loc[((ref_raw['X'] < (ref_raw.loc[i,'X'] +300)) & (ref_raw['X'] > (ref_raw.loc[i,'X'] - 300))) &
+                                                 ((ref_raw['Y'] < (ref_raw.loc[i,'Y'] +dist_offset)) & (ref_raw['Y'] > (ref_raw.loc[i,'Y'] - dist_offset))) &
+                                                 (ref_raw['ID'] != ref_raw.loc[i,'ID']) & (ref_raw['Pred'] == ref_raw.loc[i,'Pred'])&(ref_raw['Machine_Time']  > (ref_raw.loc[i,'Machine_Time'] - dt.timedelta(days = time_offset)))&
+                                                 (ref_raw['Machine_Time']  < (ref_raw.loc[i,'Machine_Time'] + dt.timedelta(days = time_offset))),'ID'].unique())/
+                                   len(ref_raw.loc[(ref_raw['ID']!=ref_raw.loc[i,'ID'])&(ref_raw['Machine_Time']>(ref_raw.loc[i,'Machine_Time']-dt.timedelta(days=time_offset)))&(ref_raw['Machine_Time']  < (ref_raw.loc[i,'Machine_Time'] + dt.timedelta(days = time_offset))),'ID'].unique()) for i in ref_raw.index]
+        
+                ref_raw['DF_Ratio(%)'] = (raw['DF_Ratio']*100).astype('int')
+
+
+                raw['ref_check'] = [len(ref_raw[(ref_raw['Lot'] == raw.loc[i,'Lot']) 
+                                        & (ref_raw['X'] < raw.loc[i,'X'] + 300) & (ref_raw['X'] > raw.loc[i,'X'] - 300) 
+                                        & (ref_raw['Y'] < raw.loc[i,'Y'] + dist_offset) & (ref_raw['Y'] > raw.loc[i,'X'] - dist_offset)]) if raw.loc[i,'DF_Ratio(%)'] > defect_thres else 999 for i in raw.index]
+
+                ####################################################################
+                raw['Machine'] = mchn
+                logger.info(f"{mchn}_{raw.loc[raw['ref_check']==0, 'DF_Ratio(%)'].unique()}")
+    
+                graph_df = pd.concat([graph_df, raw])
+    
+    
+        else : 
+            if len(raw)>1:
+        
+                raw['Time'] = pd.to_datetime(raw['Time'])
+                # temp['Machine_Time'] = temp['Machine_Time'].astype('int')
+                # raw['Machine_Time'] = pd.to_datetime(raw['Machine_Time'] ,format = '%y%m%d')
+                raw['X'] = raw['X'].astype('float')/1000
+                raw['Y'] = raw['Y'].astype('float')/1000
+                raw['Machine_Time'] = raw['Machine_Time'].astype('str')
+                raw['Machine_Time'] = [dt.datetime.strptime(t,'%Y-%m-%d %H:%M:%S') if (len(t) == 19) else dt.datetime.strptime(t,'%Y-%m-%d') for t in raw['Machine_Time']]
+                time_offset = 4
+                dist_offset = 1
+                raw['ID_Cnt'] = [len(raw.loc[(raw['ID']!=raw.loc[i,'ID'])&(raw['Machine_Time']>(raw.loc[i,'Machine_Time']-dt.timedelta(days=time_offset)))&(raw['Machine_Time']  < (raw.loc[i,'Machine_Time'] + dt.timedelta(days = time_offset))),'ID'].unique()) for i in raw.index]       
+                raw['DF_Ratio'] = [len(raw.loc[((raw['X'] < (raw.loc[i,'X'] +dist_offset)) & (raw['X'] > (raw.loc[i,'X'] - dist_offset))) &
+                                       ((raw['Y'] < (raw.loc[i,'Y'] +dist_offset)) & (raw['Y'] > (raw.loc[i,'Y'] - dist_offset))) & (raw['ID'] != raw.loc[i,'ID']) & (raw['Pred'] == raw.loc[i,'Pred']) 
+                                       &(raw['Machine_Time']  > (raw.loc[i,'Machine_Time'] - dt.timedelta(days = time_offset)))&(raw['Machine_Time']  < (raw.loc[i,'Machine_Time'] + dt.timedelta(days = time_offset))),'ID'].unique())/len(raw.loc[(raw['ID']!=raw.loc[i,'ID'])&(raw['Machine_Time']>(raw.loc[i,'Machine_Time']-dt.timedelta(days=time_offset)))&(raw['Machine_Time'] < (raw.loc[i,'Machine_Time'] + dt.timedelta(days = time_offset))),'ID'].unique()) for i in raw.index]
+        
+                raw['DF_Ratio(%)'] = (raw['DF_Ratio']*100).astype('int')
+
+                ####################################################################
+                ref_raw['Time'] = pd.to_datetime(ref_raw['Time'])
+                # temp['Machine_Time'] = temp['Machine_Time'].astype('int')
+                # raw['Machine_Time'] = pd.to_datetime(raw['Machine_Time'] ,format = '%y%m%d')
+                ref_raw['X'] = ref_raw['X'].astype('float')/1000
+                ref_raw['Y'] = ref_raw['Y'].astype('float')/1000
+                ref_raw['Machine_Time'] = ref_raw['Machine_Time'].astype('str')
+                ref_raw['Machine_Time'] = [dt.datetime.strptime(t,'%Y-%m-%d %H:%M:%S') if (len(t) == 19) else dt.datetime.strptime(t,'%Y-%m-%d') for t in ref_raw['Machine_Time']]
+    
+                time_offset = 4
+                dist_offset = 1
+                ref_raw['ID_Cnt'] = [len(ref_raw.loc[(ref_raw['ID']!=ref_raw.loc[i,'ID'])&(ref_raw['Machine_Time']>(ref_raw.loc[i,'Machine_Time']-dt.timedelta(days=time_offset)))&(ref_raw['Machine_Time']  < (ref_raw.loc[i,'Machine_Time'] + dt.timedelta(days = time_offset))),'ID'].unique()) for i in ref_raw.index]       
+                ref_raw['DF_Ratio'] = [len(ref_raw.loc[((ref_raw['X'] < (ref_raw.loc[i,'X'] +300)) & (ref_raw['X'] > (ref_raw.loc[i,'X'] - 300))) &
+                                                 ((ref_raw['Y'] < (ref_raw.loc[i,'Y'] +dist_offset)) & (ref_raw['Y'] > (ref_raw.loc[i,'Y'] - dist_offset))) &
+                                                 (ref_raw['ID'] != ref_raw.loc[i,'ID']) & (ref_raw['Pred'] == ref_raw.loc[i,'Pred'])&(ref_raw['Machine_Time']  > (ref_raw.loc[i,'Machine_Time'] - dt.timedelta(days = time_offset)))&
+                                                 (ref_raw['Machine_Time']  < (ref_raw.loc[i,'Machine_Time'] + dt.timedelta(days = time_offset))),'ID'].unique())/
+                                   len(ref_raw.loc[(ref_raw['ID']!=ref_raw.loc[i,'ID'])&(ref_raw['Machine_Time']>(ref_raw.loc[i,'Machine_Time']-dt.timedelta(days=time_offset)))&(ref_raw['Machine_Time']  < (ref_raw.loc[i,'Machine_Time'] + dt.timedelta(days = time_offset))),'ID'].unique()) for i in ref_raw.index]
+        
+                ref_raw['DF_Ratio(%)'] = (raw['DF_Ratio']*100).astype('int')
+
+
+                raw['ref_check'] = [len(ref_raw[(ref_raw['Lot'] == raw.loc[i,'Lot']) & (ref_raw['X'] < raw.loc[i,'X'] + dist_offset) 
+                                        & (ref_raw['X'] > raw.loc[i,'X'] - dist_offset) & (ref_raw['Y'] < raw.loc[i,'Y'] + dist_offset) 
+                                        & (ref_raw['Y'] > raw.loc[i,'X'] - dist_offset)]) if raw.loc[i,'DF_Ratio(%)'] > defect_thres else 999 for i in raw.index]
+
+                ####################################################################
+                raw['Machine'] = mchn
+                logger.info(f"{mchn}_{raw.loc[raw['ref_check']==0, 'DF_Ratio(%)'].unique()}")
+
+                
+                graph_df = pd.concat([graph_df, raw])
+    
+    
+    
+    
+    
+    ##########################################################
+    global image_for_body
+    if len(graph_df) > 0 :
+        graph_df['DF_Ratio(%)'] = graph_df['DF_Ratio(%)'].astype('int')
+        graph_df['ref_check'] = graph_df['ref_check'].astype('int')
+        if len(graph_df[(graph_df['DF_Ratio(%)'] >= defect_thres) & (graph_df['ref_check'] ==0)]) > 1:
+            fig, ax =  plt.subplots(figsize = (8,10))
+            sns.scatterplot(data = graph_df[(graph_df['DF_Ratio(%)'] >= defect_thres) & (graph_df['ref_check'] ==0)], x='X', y='Y', hue = 'Machine',palette='deep')
+    
+            # for line in range(0, graph_df[graph_df['DF_Ratio(%)'] >= defect_thres].shape[0]):
+            #      plt.text(graph_df[graph_df['DF_Ratio(%)'] >= defect_thres]['X'].iloc[line], 
+            #               graph_df[graph_df['DF_Ratio(%)'] >= defect_thres]['Y'].iloc[line], 
+            #               round(graph_df[graph_df['DF_Ratio(%)'] >= defect_thres]['DF_Ratio(%)'].iloc[line], 2), 
+            #               # horizontalalignment='left', 
+            #               size='medium', 
+            #               color='black', 
+            #               weight='semibold')
+
+            for line in range(0, graph_df[(graph_df['DF_Ratio(%)'] >= defect_thres) & (graph_df['ref_check'] ==0)].shape[0]):
+                if graph_df[(graph_df['DF_Ratio(%)'] >= defect_thres) & (graph_df['ref_check'] ==0)]['DF_Ratio(%)'].iloc[line] >= defect_thres*2:
+                    plt.text(graph_df[(graph_df['DF_Ratio(%)'] >= defect_thres) & (graph_df['ref_check'] ==0)]['X'].iloc[line], 
+                             graph_df[(graph_df['DF_Ratio(%)'] >= defect_thres) & (graph_df['ref_check'] ==0)]['Y'].iloc[line], 
+                             round(graph_df[(graph_df['DF_Ratio(%)'] >= defect_thres) & (graph_df['ref_check'] ==0)]['DF_Ratio(%)'].iloc[line], 2), 
+                             size='medium', 
+                             color='black', 
+                             weight='semibold')
+
+
+            
+            plt.legend(bbox_to_anchor=(1, 1), loc='upper left')
+            plt.plot(np.linspace(-750,750,100),np.zeros(100),color='gray',linestyle='-')
+            plt.plot(np.zeros(100),np.linspace(-650,650,100),color='gray',linestyle='-')
+            plt.axis([-750,750,-650,650])
+            plt.grid(True, linestyle=':')
+            plt.xticks(range(-750, 751, 50))
+            plt.yticks(range(-650, 651, 50))            
+            plt.suptitle(f'AAI Defect Map By Machine', fontsize = 10)    
+            plt.subplots_adjust(right=1.2)
+            fig.savefig(f'C:/Python/Image_Trans/mchn_fixed_defect.jpg',bbox_inches='tight', pad_inches=0)
+            path = f'C:/Python/Image_Trans/mchn_fixed_defect.jpg'
+    
+            img = Image.open(path)
+            bytearr= io.BytesIO()
+            img.save(bytearr, format="JPEG")
+            imgbytearr = bytearr.getvalue()
+            encoded_image = base64.b64encode(imgbytearr).decode("utf-8")
+    
+            image_for_body = f'<img src="data:image/jpg;base64,{encoded_image}"/>'    
+    
+    
+            contents += image_for_body
+            contents += '<br>' 
+            temp = graph_df[(graph_df['DF_Ratio(%)'] >= defect_thres) & (graph_df['ref_check'] ==0)]
+            temp = temp[['Machine','Time','Machine_Time','Lot','ID','Cell_No','X','Y','DF_Ratio(%)','Pred','Loc']].sort_values(['Machine','Time','DF_Ratio(%)'],ascending = False).reset_index(drop=True).to_html()
+            temp = temp.replace('&lt;','<')
+            temp = temp.replace('&gt;','>')
+            contents += temp
+            contents += '<br>' 
+            os.remove(path)
+    
+        else : 
+            contents += '<p style="font-weight:bolder; font-faily:맑은 고딕">' + '특이사항 없습니다.'  + '</p>'
+            contents += '<br>'
+    else :
+        contents += '<p style="font-weight:bolder; font-faily:맑은 고딕">' + '특이사항 없습니다.'  + '</p>'
+        contents += '<br>'
+    subj_err = len(graph_df[(graph_df['DF_Ratio(%)'] >= defect_thres) & (graph_df['ref_check'] ==0)])
+    return contents, subj_err
+
+
+def send_image(contents, subj_err):
+    sender_email = 'image_checker@dwchem.co.kr'
+    sender_password = 'a12345'
+    if subj_err > 0:
+    #receiver_email = 'chash@dwchem.co.kr'
+        subject = '[Check 필요]'+(dt.datetime.today()-dt.timedelta(days=1)).strftime('%m월%d일 %H시') + '_Sub_설비별_AAI_고정좌표'
+    else : 
+        subject = '[특이사항 없음]'+(dt.datetime.today()-dt.timedelta(days=1)).strftime('%m월%d일 %H시') + '_Sub_설비별_AAI_고정좌표'
+    body = contents
+
+    SMTP_SERVER = 'mail.dwchem.co.kr'
+    SMTP_PORT = 25
+    
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.mime.base import MIMEBase
+    from email.encoders import encode_base64
+
+    Mlist = pd.read_csv('C:/Python/Mail_Receiver_list/Machine_Crack.csv', encoding = 'utf-8')#AAI_Scratch_send
+    Mlist.sort_values("Name",ascending = True, inplace = True,ignore_index = True)
+    Mlist = Mlist.loc[:,'Mail_Address']
+    Mail_address = ''  
+    for i in Mlist.index: 
+        Mail_address += Mlist.loc[i] +';'
+
+    message = MIMEMultipart()
+    message['From'] = f"{sender_email}"
+    
+    message['To'] = Mail_address
+    message['Subject'] = subject
+    text = MIMEText(body, 'html')
+    message.attach(text)
+    
+
+
+    
+    # files = glob.glob('C:/Python/CUT_AAI_Temp/temp_csv/*.csv')
+    
+    # for f in files:
+    #     part = MIMEBase('application','octet-stream')
+    #     part.set_payload(open(f,'rb').read())
+    #     encode_base64(part)
+    #     part.add_header('Content-DisPosition','attachment; filename="%s"' % os.path.basename(f))
+    #     message.attach(part)
+    #     os.remove(f)
+        
+    for receiver in Mlist:        
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)    
+        server.sendmail(sender_email, receiver, message.as_string())    
+    server.quit()   
+
+
+try:     
+    logger.info('Make_Image_Start_Start!')    
+    img_df=img_file_todf()
+    logger.info('Make_Image_Done!')
+except Exception as e :
+    logger.error('오류 발생', exc_info = True)
+    pass
+
+try:
+    contents = '<p style="font-weight:bolder; font-faily:맑은 고딕">' + 'Sub 설비별 AAI 고정 좌표 입니다.'  + '</p>'
+    contents += '<br>' 
+    logger.info('Defect_Cal_Start!')
+    contents, subj_err = fixed_df_graph(img_df, contents)
+    # contents = make_scrath_graph(img_df, contents)
+    send_image(contents, subj_err)
+    logger.info('Defect_Cal_Done!')
+except Exception as e :
+    logger.error('오류 발생', exc_info = True)
+    pass
