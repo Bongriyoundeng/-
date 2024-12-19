@@ -1,0 +1,192 @@
+import os
+import pandas as pd
+import warnings
+import glob
+from pathlib import Path
+import math
+import time
+import datetime as dt
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+from datetime import datetime
+import matplotlib
+# matplotlib.use('agg')
+import matplotlib.pyplot as plt
+import torchvision
+from torchvision import models
+import torch
+import torch.nn as nn
+import torchvision.transforms as T
+from torchvision.transforms import ToTensor, Compose
+from torchvision import transforms
+from torch.utils.data import DataLoader, Dataset
+from torchvision.datasets import ImageFolder
+from PIL import Image
+import numpy as np
+import shutil
+import re
+import schedule
+import sys
+import io
+import base64
+import win32com.client
+import cv2
+import pythoncom
+import torch.nn.functional as F
+import logging
+from logging.handlers import TimedRotatingFileHandler
+import gc
+import pymssql
+import warnings
+import traceback
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email.encoders import encode_base64
+from string import Template
+from email.mime.image import MIMEImage
+from tqdm import tqdm
+
+warnings.filterwarnings(action='ignore')
+pd.set_option('mode.chained_assignment',  None) # <==== 경고를 끈다
+
+
+img_size = input("이미지 Size를 입력해 주세요. ex> X.Y 280.140 :")
+img_crop = input("이미지를 가운데만 정사각형으로 가져갈까요? ex> 70 :")
+V_Flip = input("이미지를 50% 수직 방향으로 뒤집을까요?(1추천) Yes : 1, No : 0")
+H_Flip = input("이미지를 50% 수직 방향으로 뒤집을까요?(1추천) Yes : 1, No : 0")
+Ad_Sharpness = input("Sharpness 를 Random 하게 조정할까요?(Defocus 가능 시 1추천) Yes : 1, No : 0")
+gausblur = input("Blur 를 Random 하게 조정할까요?(Defocus 가능 시 1추천) Yes : 1, No : 0")
+
+
+[
+    #T.CenterCrop(700),
+    #T.RandomHorizontalFlip(p=0.5),
+    T.Resize((600,600)),
+    T.ToTensor(),
+    #T.Normalize((0.5), (0.5))# T.Normalize([0.5],[0.5])
+]
+
+
+
+img_T = T.Compose(transform_list)
+
+
+os.environ['CUDA_DEVICE_ORDER']='PCI_BUS_ID'
+os.environ['CUDA_VISIBLE_DEVICES']='1'
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Device:", device)
+print("Current_cuda_device:", torch.cuda.current_device())
+print("Count_of_using_GPUs:", torch.cuda.device_count())
+
+model_s = models.resnet18(weights=None)
+num_ftrs_s = model_s.fc.in_features
+fc_s = nn.Linear(num_ftrs_s, 10)
+model_s.fc = fc_s
+model_name_s = 'C:/Python/Layer_Key_Image_Learning'
+model_s.load_state_dict(torch.load(f'{model_name_s}.pth', map_location=device))
+model_s.eval()
+
+from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam.utils.image import show_cam_on_image, preprocess_image
+
+def preprocess_image(img):
+    preprocessing = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    return preprocessing(img).unsqueeze(0)
+
+def show_cam_on_image(img, mask):
+    heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+    heatmap = np.float32(heatmap) / 255
+    cam = heatmap + np.float32(img)
+    cam = cam / np.max(cam)
+    return np.uint8(255 * cam)
+
+class GradCAM:
+    def __init__(self, model, target_layer):
+        self.model = model
+        self.target_layer = target_layer
+        self.gradients = None
+        self.activations = None
+        self.hook_layers()
+
+    def hook_layers(self):
+        def forward_hook(module, input, output):
+            self.activations = output
+
+        def backward_hook(module, grad_in, grad_out):
+            self.gradients = grad_out[0]
+
+        self.target_layer.register_forward_hook(forward_hook)
+        self.target_layer.register_backward_hook(backward_hook)
+
+    def generate_cam(self, input_image, target_class=None):
+        self.model.eval()
+        output = self.model(input_image)
+    
+        if target_class is None:
+            target_class = np.argmax(output.cpu().data.numpy())
+    
+        self.model.zero_grad()
+        class_loss = output[0, target_class]
+        class_loss.backward()
+    
+        gradients = self.gradients.cpu().data.numpy()[0]
+        activations = self.activations.cpu().data.numpy()[0]
+    
+        weights = np.mean(gradients, axis=(1, 2))
+        cam = np.zeros(activations.shape[1:], dtype=np.float32)
+    
+        for i, w in enumerate(weights):
+            cam += w * activations[i]
+    
+        cam = np.maximum(cam, 0)
+        cam = cv2.resize(cam, (input_image.shape[2], input_image.shape[3]))
+        cam = cam - np.min(cam)
+        cam = cam / np.max(cam)
+        return cam
+
+from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam.utils.image import show_cam_on_image, preprocess_image
+
+
+# Grad-CAM을 사용하여 특징 맵 시각화 함수
+def visualize_cam(model, img, target_layer):
+    cam = GradCAM(model=model, target_layers=[target_layer])
+    grayscale_cam = cam(input_tensor=img)
+    img = img.squeeze(0).permute(1, 2, 0).cpu().numpy()
+    visualization = show_cam_on_image(img, grayscale_cam[0, :], use_rgb=True)
+    return visualization
+
+
+labels = [.....]
+
+outputs
+
+import torch.nn.functional as F
+F.softmax(outputs,dim=1).max()
+
+model_s.eval()
+import torch.nn.functional as F
+img_list='D:\\Learning_Image\\Layer_Key\\Study_Image\\analysis/'
+img_list = glob.glob(img_list+'*.jpg')
+for img in img_list:
+    print(img)
+    img = Image.open(img).convert('RGB')
+    img_t = img_T(img)
+    img2=img_t.reshape(1,img_t.shape[0],img_t.shape[1],img_t.shape[2])
+    
+    outputs = model_s(img2)
+    _, preds = outputs.max(dim=1)
+    prediction_ratio = F.softmax(outputs,dim=1).max()
+        
+    visualization = visualize_cam(model_s, img2, model_s.layer4[1].conv2)
+    plt.figure()
+    plt.imshow(visualization)
+    plt.title(f'Pred: {labels[preds.item()]}, Score:{prediction_ratio:.3f}')
+    plt.show()
+    
