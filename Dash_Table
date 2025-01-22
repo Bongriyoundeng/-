@@ -1,0 +1,177 @@
+import pandas as pd
+import dash
+from dash import Dash, dcc, html, dash_table
+from dash.dependencies import Input, Output, State
+import os
+import subprocess
+
+# 네트워크 드라이브 연결
+lpath = r'\\xxx.xxx.xxx.xx\xxx'
+os.system('net use * /delete /y')
+os.system(f'net use {lpath} /user:xx xx')
+
+# 데이터 경로 설정
+r_path = r'\\xxx.xxx.xxx.xx\A\B\C\D'
+
+# 데이터 로드
+raw_data = pd.read_csv(os.path.join(r_path, '4Dash', 'Summary.csv'), index_col=0)
+
+# Dash 앱 초기화
+app = Dash(__name__)
+app.config.suppress_callback_exceptions = True
+# → Dash App 이 콜백 예외를 억제하는 설정. 초기 레이아웃에 존재하지 않는 컴포너트에 대한 콜백을 정의할때 발생할 수 있는 예외를 억제함
+# → 콜백이 동적으로 생성된 컴포넌트나 나중에 레이아웃에 추가될 컴포넌트를 참조할 때 유용함. 미설정 시 초기 레이아웃에 존재하지 않은 컴포넌트에 대한 오류를 발생시킴
+
+# link_position 열을 HTML 링크로 변환
+def create_link(path):
+    if path != '-':
+        return f'<button onclick="openFolder(\'{path}\')">Link</button>'
+    return '-'
+
+raw_data['link_position'] = raw_data['link_position'].apply(create_link)
+
+# link_position 열을 HTML 링크로 변환
+def create_link(path):
+    if path != '-':
+        return f'<button onclick="openFolder(\'{path}\')">Link</button>'
+    return '-'
+
+raw_data['link_position'] = raw_data['link_position'].apply(create_link)
+
+app.layout = html.Div([ #html.Div 를 사용하여 여러 컴포넌트를 포함하는 레이아웃을 정의함
+    html.Div([ #체크리스트와 입력필드, 버튼을 포함한 레이아웃 정의
+        dcc.Checklist(  #'Select Button' 옵션을 제공함
+            id='select-all',
+            options=[{'label': 'Select All', 'value': 'select-all'}],
+            value=[]
+        ),
+        html.Div([ #검사자 이름을 입력받는 텍스트와 버튼을 포함한 레이아웃 정의
+            dcc.Input(id='inspector-name', type='text', placeholder='Inspector Name'), #검사자 입력
+            html.Button("검사 완료", id="delete-button", n_clicks=0, style={'float': 'right'}) #검사 완료 버튼
+        ], style={'display': 'flex', 'align-items': 'center'})
+    ], style={'display': 'flex', 'justify-content': 'space-between'}),
+    dash_table.DataTable(
+        id='table', #고유 ID 설정
+        columns=[{"name": i, "id": i, "presentation": "markdown"} if i == 'link_position' else {"name": i, "id": i} for i in raw_data.columns],
+        # 테이블의 열을 정의함. 각 열의 이름과 ID 를 정의함. Link_Position 열의 경우 Presentational 속성을 markdown 으로 설정하여 HTML 을 랜터링함
+        #markdown 은 해당 열의 데이터를 마크업 언어라는 의미 / 랜더링은 HTML 로 변환하여 브라우저에 표시할 수 있도록 함. 
+        data=raw_data.to_dict('records'), #data_table 을 dict 형태로 변환
+        row_selectable='multi',
+        selected_rows=[],
+        style_cell_conditional=[
+            {'if': {'column_id': 'checkbox'},
+             'width': '30px'}
+        ],
+        style_table={'overflowX': 'auto'}, #테이블의 가로 스크롤을 가능하게 함
+        style_header_conditional=[
+            {'if': {'column_id': 'checkbox'},
+             'width': '30px'}
+        ],
+        style_data_conditional=[
+            {'if': {'column_id': 'checkbox'},
+             'width': '30px'}
+        ],
+        markdown_options={"html": True}
+    ),
+    dcc.Store(id='folder-path', storage_type='session'),
+    dcc.Store(id='open-folder-trigger', storage_type='session'),
+    html.Div(id='dummy-output', style={'display': 'none'})
+])
+
+# select all 체크박스를 클릭하면 테이블의 모든 행을 선택함
+@app.callback(
+    Output('table', 'selected_rows'),
+    Input('select-all', 'value'),
+    State('table', 'data')
+)
+def select_all_rows(select_all, rows):
+    if 'select-all' in select_all:
+        return list(range(len(rows)))
+    return []
+
+#검사 완료 버튼을 누르면 선택된 열을 모두 삭제함
+@app.callback(
+    Output('table', 'data'),
+    Input('delete-button', 'n_clicks'),
+    State('table', 'data'),
+    State('table', 'selected_rows'),
+    State('inspector-name', 'value')
+)
+def delete_selected_rows(n_clicks, rows, selected_rows, inspector_name):
+    if n_clicks > 0:
+        df = pd.DataFrame(rows)
+        selected_df = df.iloc[selected_rows]
+        if inspector_name:
+            selected_df['Inspector'] = inspector_name
+        
+        # 선택된 행을 별도의 CSV 파일로 저장
+        save_path = os.path.join(r_path, f'selected_rows_{inspector_name}.csv')
+        selected_df.to_csv(save_path, index=False)
+        
+        # 선택된 행을 원본 데이터에서 제거
+        df = df.drop(selected_rows).reset_index(drop=True)
+        
+        return df.to_dict('records')
+    return rows
+
+
+# update_folder_path 콜백함수
+@app.callback(
+    [Output('folder-path', 'data'), # folder_path 라는 ID 를 가진 dcc.Store 컴포넌트의 data 속성에 경로를 저장함
+Output('open-folder-trigger', 'data')], # open-folder-trigger 라는 ID 를 가진 dcc.Store 컴포넌트의 data 속성에 트리거 값을 저장함
+    Input('table', 'active_cell'), # 테이블에서 활성화 된 셀을 입력으로 받음
+    State('table', 'data') # 테이블의 데이터를 상태로 받음
+)
+def update_folder_path(active_cell, data):
+    if active_cell and active_cell['column_id'] == 'link_position':
+        # Extract the path from the button HTML
+        path_html = data[active_cell['row']]['link_position']
+        start_idx = path_html.find("openFolder('") + len("openFolder('")
+        end_idx = path_html.find("')", start_idx)
+        path = path_html[start_idx:end_idx]
+        return path, True
+    return None, False
+# 사용자가 테이블의 셀을 클릭하면 active_cell 이 업데이터 됨
+# active_cell 이 link_positon열에 해당되는 경우 해당 셀의 경로를 추출하여 forth-path 에 저장하고, open-folder-trigger를 True 로 설정함
+# 그렇지 않은 경우 None 과 flase 를 반환함
+
+
+
+@app.callback(
+    Output('dummy-output', 'children'),
+    Input('open-folder-trigger', 'data'),
+    State('folder-path', 'data'),
+    prevent_initial_call=True
+)
+def open_folder(trigger, path):
+    if trigger and path:
+        subprocess.Popen(['python', r'C:\***\***\***\Open_Folder.py', path])
+    return ''
+# 사용자가 테이블의 link_position 열을 클릭하면 update_foldere_path 콜백 함수가 호출되어 클릭된 셀의 경로를 folder-path 의 data 속성에 저정함
+# folder-path 의 data 속성이 변경되면 open_folder 콜백함수가 자동으로 호출됨
+# open_folder 함수는 전달된 경로로 외부 프로그램을 실행함
+
+# 외부 실행 파일
+############################
+import os
+import sys
+
+def open_folder(path):
+    # 하이퍼링크 형태의 문자열에서 실제 경로 추출
+    if "openFolder('" in path:
+        start_idx = path.find("openFolder('") + len("openFolder('")
+        end_idx = path.find("')", start_idx)
+        path = path[start_idx:end_idx]
+    
+    # 폴더 열기
+    os.startfile(path)
+
+if __name__ == "__main__":
+    folder_path = sys.argv[1]
+    open_folder(folder_path)
+###################################
+
+
+
+if __name__ == '__main__':
+    app.run_server(debug=True)
