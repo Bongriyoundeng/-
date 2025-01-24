@@ -1,0 +1,465 @@
+import glob
+import torchvision
+import torch
+import torch.nn as nn
+from torchvision import models
+import torchvision.transforms as T
+from torchvision.transforms import ToTensor, Compose
+from torchvision import transforms
+from torch.utils.data import DataLoader, Dataset
+from torchvision.datasets import ImageFolder
+import torch.nn.functional as F
+from PIL import Image
+import re
+from datetime import datetime
+import logging
+from logging.handlers import TimedRotatingFileHandler
+import os
+import numpy as np
+import json
+
+
+
+
+logger = logging.getLogger(name = 'Data_Matrix_')
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('|%(asctime)s||%(levelname)s|%(message)s',datefmt='%Y-%m-%d %H:%M:%S')
+stream_handler = logging.StreamHandler()
+
+
+file_handler = logging.handlers.TimedRotatingFileHandler(
+    filename= ('로그파일명'+'.log'), 
+    when = "midnight" ,  # W0
+    interval = 1,
+    backupCount= 0 , 
+    #atTime=datetime.time(0, 0, 0)
+    )
+stream_handler.setFormatter(formatter)
+logger.addHandler(stream_handler)
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+import sys
+try:
+    path = sys.argv[1]
+    img_path_fo = sys.argv[2]
+    result_path_fo = sys.argv[3]
+    logger.info('ActionReceived_Data_OK')
+    logger.info('Action'+ path)
+    logger.info('Action'+ img_path_fo)
+    logger.info('Action'+ result_path_fo)
+except Exception as e :
+    logger.error('Action'+ '오류 발생', exc_info = True)
+    pass
+
+
+# In[3]:
+
+
+
+try:
+    img_T = T.Compose([
+        T.Resize((120,280)),
+        T.ToTensor()
+        
+    ])
+    with open(r'dict 형태의 분류 모델 정의 파일 위치', 'r', encoding = 'utf-8') as f:
+        label2jdg = json.load(f)
+    
+    img2names = [j for (j, k) in label2jdg.items()]
+    Pred_Judge = {i+1:k for i, (j, k) in enumerate(label2jdg.items())}
+    
+    os.environ['CUDA_DEVICE_ORDER']='PCI_BUS_ID'
+    os.environ['CUDA_VISIBLE_DEVICES']='0'
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # print(device)
+    
+    model_name = '이미지 학습 모델 주소'
+    model_name_2 = '이미지 학습 모델 주소2'
+    
+    with open(r'C:\Python\FIL_DIT2_DL\Learning_result\Zone136_Label.json', 'r', encoding = 'utf-8') as f:
+        label2jdg2 = json.load(f)
+    
+    img2names_2 = [j for (j, k) in label2jdg2.items()]
+    Pred_Judge_2 = {i+1:k for i, (j, k) in enumerate(label2jdg2.items())}
+    
+    
+    
+    def model_loaded(model_name,img2names):
+        if "resnet" in model_name.split('\\')[-1] :    
+            model = models.resnet18(weights=None)
+            num_ftrs = model.fc.in_features
+            fc = nn.Linear(num_ftrs, len(img2names))
+            model.fc = fc
+            model.load_state_dict(torch.load(f'{model_name}.pth', map_location=device,weights_only=True))
+            model.eval()
+        elif "efficientnet" in model_name.split('\\')[-1] : 
+            model = models.efficientnet_b1(weights='EfficientNet_B1_Weights.IMAGENET1K_V1')
+            num_ftrs = model.classifier[1].in_features
+            model.classifier[1] = nn.Linear(num_ftrs, len(img2names))
+            model.load_state_dict(torch.load(f'{model_name}.pth', map_location=device,weights_only=True))
+            model.eval()    
+        return model
+    model = model_loaded(model_name, img2names)
+    
+    # In[4]:
+
+
+    class mkDataset(Dataset):
+        def __init__(self, loc):
+            self.image_path_list = glob.glob(loc+'\\*.jpg')
+            self.index = list(range(len(self.image_path_list)))
+            self.transform = img_T
+    
+        def __len__(self):
+            return len(self.image_path_list)
+    
+    
+        def __getitem__(self, idx):
+            img_path = self.image_path_list[idx]
+            img = Image.open(img_path).convert('RGB')
+            img = self.transform(img)
+            #img=img.reshape(img.shape[0],img.shape[1],img.shape[2]) 
+            index = self.index[idx]
+            return img, index, img_path, img_path.split('\\')[-1]
+
+
+    class mkDataset_list(Dataset):
+        def __init__(self, loc):
+            self.image_path_list = loc
+            self.index = list(range(len(loc)))
+            self.transform = img_T
+    
+        def __len__(self):
+            return len(self.image_path_list)
+    
+    
+        def __getitem__(self, idx):
+            img_path = self.image_path_list[idx]
+            img = Image.open(img_path).convert('RGB')
+            img = self.transform(img)
+            #img=img.reshape(img.shape[0],img.shape[1],img.shape[2]) 
+            index = self.index[idx]
+            return img, index, img_path, img_path.split('\\')[-1]
+    
+    # In[6]:
+    
+    
+    def result_file_Update(file, change_Judge_List):
+        #파일 열기
+        f = open(file,'r',encoding = 'UTF8')
+        lines = f.readlines()
+        #Judge 변경 Index 결함들의 Defect Info 수정
+        for di in change_Judge_List:
+            if "RE" in lines[lines.index('[Information of Detections]\n') + int(di)]:
+                lines[lines.index('[Information of Detections]\n') + int(di)] = lines[lines.index('[Information of Detections]\n') + int(di)].replace("RE","OK")
+                
+            elif "OK" in lines[lines.index('[Information of Detections]\n') + int(di)]:
+                lines[lines.index('[Information of Detections]\n') + int(di)] = lines[lines.index('[Information of Detections]\n') + int(di)].replace("OK","RE")
+    
+        #수정된 결함 정보 DF 만들기
+        Defect_Judge = []
+        for i in range(lines.index('[Information of Detections]\n')+1, len(lines)):
+            Defect_Judge.append({'IDX':lines[i].split(',')[0].strip(),'Piece_No':lines[i].split(',')[-1].strip(),'Defect_Judge':lines[i].split(',')[-6].strip()})
+            # Defect_Judge.append({lines[i].split(',')[-1].strip():lines[i].split(',')[-6].strip()})
+        import pandas as pd
+        Defect_Judge = pd.DataFrame(Defect_Judge)
+        
+        pvt = pd.pivot_table(data = Defect_Judge, index = ['Piece_No'], columns = 'Defect_Judge', values = {'Defect_Judge':'count'}, aggfunc = 'count').reset_index()
+        
+        pvt.columns = [' '.join(col).strip() for col in pvt.columns]
+        pvt.columns = [col.replace('IDX','').strip() if 'IDX' in col else col for col in pvt.columns]
+        
+        if 'RE' not in pvt.columns:
+            pvt['RE'] = 0
+        else:
+            pass
+    
+        #Recipe 에서 Cell 정보 가져오기
+    
+        PPID_link = open('특정 검사기 recipe 파일 list 위치','r', encoding = 'CP949')
+        PPID_link = PPID_link.readlines()
+        Ins_no= [PPID.split('=')[0].replace('UPPER','INS') for PPID in PPID_link if (lines[lines.index('[Recipe Name]\n')+1].strip() in PPID) & ('UPPER_NAME' in PPID)][0]
+        Ins_ID = [PPID.split('=')[1].replace('`','').strip() for PPID in PPID_link if Ins_no in PPID][0]
+        recipe = open('특정 검사기 recipe 파일 위치'+Ins_ID+'.rcp', 'r', encoding = 'CP949')
+        recipe = recipe.readlines()
+        recipe_temp = []
+        for item in recipe:
+            if ('GLASS_CELL_ID' in item):# | ('GLASS_PIECE_INDEX' in item)
+                recipe_temp.append({'Comment':item.split('=')[0].strip(),'Values':item.split('=')[1].replace('`','').strip()})
+        recipe_temp= pd.DataFrame(recipe_temp)
+    
+        
+        recipe_temp['Q_Panel'] = recipe_temp['Values'].str[:1]
+        recipe_temp['RE'] = [0 if len(pvt.loc[pvt['Piece_No']== cell, 'RE'].values) ==0 else pvt.loc[pvt['Piece_No']== cell, 'RE'].squeeze() for cell in recipe_temp['Values']]
+    
+        #분판별 변수에 Q_Piece Info, Q_Info, Sheet Info Update 하기
+        for q in ['A','B','C','D']:
+            globals()[q] = ''
+            for i in recipe_temp.loc[recipe_temp['Q_Panel']==q,'RE']:
+                if (i == 0) or (np.isnan(i)):
+                    globals()[q] += 'O'
+                else:
+                    globals()[q] +=('R')
+            if 'R' in globals()[q] :
+                globals()[f'{q}QJ'] = 'RE'
+            else :
+                globals()[f'{q}QJ'] = 'OK'
+        if 'R' in A+B+C+D :
+            SJ = "GR"
+        else : 
+            SJ = "OK"
+        
+        lines[lines.index('[Sheet Judge]\n')+1] = SJ+'\n'
+        
+        lines[lines.index('[Division A Sheet Judge]\n')+1] = AQJ+'\n'
+        lines[lines.index('[Division B Sheet Judge]\n')+1] = BQJ+'\n'
+        lines[lines.index('[Division C Sheet Judge]\n')+1] = CQJ+'\n'
+        lines[lines.index('[Division D Sheet Judge]\n')+1] = DQJ+'\n'
+        
+        lines[lines.index('[Division A Piece Judge]\n')+1] = A+'\n'
+        lines[lines.index('[Division B Piece Judge]\n')+1] = B+'\n'
+        lines[lines.index('[Division C Piece Judge]\n')+1] = C+'\n'
+        lines[lines.index('[Division D Piece Judge]\n')+1] = D+'\n'
+        lines[lines.index('[End Date]\n')+1] = datetime.today().strftime('%Y%m%d')+'\n'
+        lines[lines.index('[End Time]\n')+1] = datetime.today().strftime('%H%M%S')+'\n'
+        #파일 쓰기
+        with open(file, 'w', encoding = 'UTF8') as f:
+            f.writelines(lines)
+    
+        f.close()
+    
+    
+    # In[7]:
+    
+    
+    def img_name_new(path, file, img_path, preds):
+        f = open(file,'r',encoding = 'UTF8')
+        lines = f.readlines()
+        Index_Judge ={}
+        for i in range(lines.index('[Information of Detections]\n')+1,len(lines)):
+            Index_Judge.update({lines[i].split(',')[0].strip():lines[i].split(',')[-6].strip()})
+        import os 
+        raw_name_list = img_path
+        new_name_list =['.'.join([lst[0],lst[1],lst[2],lst[4],lst[5],lst[6],lst[7],Index_Judge[lst[2]],lst[3],str(preds[i]),lst[8],lst[9],lst[10],lst[11],lst[12]]) for i,lst in enumerate([re.split(r'[.,]',i) for i in raw_name_list])]
+        for i, j in zip(raw_name_list, new_name_list):
+            try: 
+                os.rename(os.path.join(path,i),os.path.join(path,j))
+            except Exception as e :
+                logger.error(f'Img_Name_New_Error {i}: 오류 발생', exc_info = True)
+        f.close()
+
+    # In[8]:
+
+
+    #from tqdm import tqdm
+
+
+    # In[9]:
+    logger.info('Action'+ 'Deep_Learning_Setting_Done')
+except Exception as e :
+    logger.error('Action'+ '오류 발생', exc_info = True)
+    pass
+
+try : 
+    dataset = mkDataset(path)    
+    dataloader = DataLoader(dataset, batch_size = 128, num_workers=0, shuffle = False)
+    logger.info('Action'+ 'Data_Load_Done')
+except Exception as e :
+    logger.error('Action'+ '오류 발생', exc_info = True)
+    pass
+    
+    
+
+
+# In[10]:
+
+
+def result_upload(path, img_path, result_path):
+    from ftplib import FTP, error_perm
+    import os
+
+    # 폴더 존재 여부 확인 및 생성
+    def ensure_directory(ftp, directory):
+        try:
+            ftp.cwd(directory)
+        except error_perm as e:
+            if '550' in str(e):
+                ftp.mkd(directory)
+                ftp.cwd(directory)
+            else:
+                raise
+    
+    ftp_server = 'FTP 파일 주소'
+    ftp_user = 'ID'
+    ftp_password = 'PW'  
+
+    try: 
+        ftp = FTP(ftp_server)
+        lgr = ftp.login(user=ftp_user, passwd=ftp_password)
+        logger.info(lgr)
+        ftp.set_pasv(True)  
+            
+        file_list = glob.glob(path+'/@*')
+        img_list = glob.glob(path+'/*.jpg')
+        folder_name = re.split(r'[@.\\]', file_list[0])[-3][:10]    
+    
+        ensure_directory(ftp,'/File0/5F00000/'+folder_name)    
+       
+        for fl in file_list:
+            with open(file = fl, mode = 'rb') as f:
+                res = ftp.storbinary('STOR '+fl.split('\\')[-1], f)
+                logger.info(res)
+    
+        ensure_directory(ftp,'/Image/5F00000/'+folder_name) 
+        
+        for fl in img_list:
+            with open(file = fl, mode = 'rb') as f:
+                res = ftp.storbinary('STOR '+fl.split('\\')[-1], f)
+                logger.info(res)    
+        
+        lgr = ftp.quit()       
+        logger.info(lgr)
+    except Exception as e :
+        logger.error('DL_Action(FTP): 오류 발생', exc_info = True)
+        logger.info(file_list[0]) #나중에 지우기
+        pass        
+
+# In[11]:
+
+
+try : 
+    preds = []
+    pred_ratio = []
+    p_idx = []
+    img_names = []
+    img_paths = []
+    
+    
+    
+    model.to('cuda')
+    for img, idx, img_path, img_name in dataloader: #tqdm()
+        img = img.to('cuda')
+        outputs = model(img)
+        predicted = torch.argmax(outputs, dim =1).detach().cpu().tolist()
+        predicted_ratio = F.softmax(outputs, dim =1).detach().cpu().tolist()
+        idx = idx.detach().cpu().tolist()
+        img_names.extend(img_name)
+        img_paths.extend(img_path)
+        p_idx.extend(idx)
+        pred_ratio.extend([np.array(i).max() for i in predicted_ratio])
+        preds.extend(predicted)
+        
+    #Zone 1,3,6(Label 번호 3,4,5 재처리)
+    pred_idx_temp = {i:p for i,p in enumerate(preds) if p in [3,4,5]}    
+    img_paths_temp = [img_paths[i] for i, j in pred_idx_temp.items()]
+
+    #Zone 1,3,6 선처리 
+    dataset = mkDataset_list(img_paths_temp)    
+    dataloader = DataLoader(dataset, batch_size = 128, num_workers=0, shuffle = False)    
+    model = model_loaded(model_name_2, img2names_2)
+
+    #2nd Filtered Deeplearning
+    temp_pred = []
+    temp_pred_ratio = []
+    temp_names = []
+    model.to('cuda')
+    for img, idx, img_path, img_name in dataloader: #tqdm()
+        img = img.to('cuda')
+        outputs = model(img)
+        predicted = torch.argmax(outputs, dim =1).detach().cpu().tolist()
+        predicted_ratio = F.softmax(outputs, dim =1).detach().cpu().tolist()
+        idx = idx.detach().cpu().tolist()
+        temp_names.extend(img_name)
+        temp_pred_ratio.extend([np.array(i).max() for i in predicted_ratio])
+        temp_pred.extend(predicted)
+
+    #1st Result Change
+    for (i, tp), (ri, rp) in zip(enumerate(temp_pred),pred_idx_temp.items()) :
+        if img2names_2[tp] != img2names[rp]:
+            preds[ri] = img2names.index(img2names_2[tp])
+            pred_ratio[ri] = temp_pred_ratio[i]
+        else :
+            pass
+
+
+
+
+    
+        
+    Judge = [re.split(r'[,.]',i)[-2] for i in img_names]
+    df_idx = [re.split(r'[,.]',i)[2] for i in img_names]
+    logger.info('Action'+ 'Image_Judge_Done')
+except Exception as e :
+    logger.error('Action'+ '오류 발생', exc_info = True)
+    pass
+
+
+# In[12]:
+
+
+try:
+######################################################
+    # import shutil
+######################################################
+    
+    change_Judge_List = []
+    for i, j, k, ipth in zip(preds,Judge,df_idx,img_names):
+        if (Pred_Judge[i+1] == j) or (Pred_Judge[i+1] == 'PD'):
+            pass
+        else : 
+            change_Judge_List.append(k)
+
+######################################################################################################################            
+
+        # if img_names[i] in ['Critcal_Zone_1_3_6_PH', 'Error_Image', 'Near_Trace_Zone_5', 'Water']:
+        #     if os.path.isdir('D:\\Image_Gathering\\' + img_names[i]):
+        #         shutil.copy(path +'/'+ ipth, 'D:\\Image_Gathering\\' + img_names[i]+'\\'+ ipth)
+        #     else:
+        #         os.makedirs('D:\\Image_Gathering\\' + img_names[i])
+        #         shutil.copy(path +'/'+ ipth, 'D:\\Image_Gathering\\' + img_names[i]+'\\'+ ipth)
+        
+######################################################################################################################
+
+
+    file = glob.glob(path+'/@*')[0]
+    # 파일명 Update
+    if len(change_Judge_List) > 0:    
+        result_file_Update(file, change_Judge_List)
+    logger.info('Action'+ str(len(change_Judge_List)) + ' Defects_Update_result_file')
+    # Image 파일명 수정
+    img_name_new(path, file, img_names, preds)
+    logger.info('Action'+ 'Update_Img_Name')
+    
+except Exception as e :
+    logger.error('Action'+ '오류 발생', exc_info = True)
+    pass
+
+
+
+# In[13]:
+
+
+try:
+    result_upload(path, img_path_fo, result_path_fo)
+    
+except Exception as e :
+    logger.error('Action'+ '오류 발생', exc_info = True)
+    pass
+
+
+try :
+    path_f =glob.glob('D:\\Image_temp\\*')
+    path_f = [p for p in path_f if datetime.now().strftime('%Y%m%d') not in p]
+    if len(path_f) > 0:
+        import shutil
+        for i in path_f:
+            shutil.rmtree(i)
+        logger.info('Action'+'temp_folder_remove')
+    else :
+        pass
+    
+except Exception as e :
+    logger.error('Action'+'오류 발생', exc_info = True)
+    pass
