@@ -1,0 +1,91 @@
+import glob
+import shutil
+import time
+import logging
+from logging.handlers import TimedRotatingFileHandler
+import datetime as dt
+from datetime import datetime
+import subprocess
+import sys
+import os
+
+
+logger = logging.getLogger(name = 'FIL2_DIT_Monitoring')
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('\r|%(asctime)s||%(levelname)s|%(message)s',datefmt='%Y-%m-%d %H:%M:%S')
+stream_handler = logging.StreamHandler()
+
+
+file_handler = logging.handlers.TimedRotatingFileHandler(
+    filename= ('로그 파일 위치' + '.log'), 
+    when = "midnight" ,  # W0
+    interval = 1,
+    backupCount= 0 , 
+    #atTime=datetime.time(0, 0, 0)
+    )
+stream_handler.setFormatter(formatter)
+logger.addHandler(stream_handler)
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+
+
+# In[8]:
+
+
+try :
+    path = sys.argv[1]
+    folder = sys.argv[2]
+    got_path = 'D:/Image_temp'
+    logger.info('Received_Data_OK')
+except Exception as e :
+    logger.error('오류 발생', exc_info = True)
+    pass
+
+
+# In[10]:
+
+
+try :
+    result_target = os.path.join(got_path,folder)
+    os.makedirs(result_target,exist_ok = True)
+    file = glob.glob(path + '\\@*')
+    if len(file) > 0 :
+        shutil.copy(file[0], result_target)
+        i=0
+        while True:    
+            list = glob.glob(path+'\\Image\\*')
+            if len(list) > 0:        
+                shutil.copy(list[i],result_target)
+                i+=1        
+                if len(list)!=i:
+                    pass
+                else :
+                    logger.info(f'FCopy_defect_count{len(list)}')
+                    break
+            else :
+                time.sleep(0.5)
+    else : 
+        pass
+    logger.info('Copy_Done')    
+except Exception as e :
+    logger.error('오류 발생', exc_info = True)
+    pass
+    
+
+
+# In[5]:
+
+
+try :
+    img_path = 'D:\\DL_TEST\\Image'
+    file_path = 'D:\\DL_TEST\\File0'
+    subprocess.Popen(['python',r"추가 외부 실행 파일 주소", result_target,img_path,file_path])
+    logger.info('DL_Action_Done')
+except Exception as e :
+    logger.error('오류 발생', exc_info = True)
+    pass
+
+
+
+
