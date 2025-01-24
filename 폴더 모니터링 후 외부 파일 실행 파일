@@ -1,0 +1,139 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[1]:
+
+
+import os
+import pandas as pd
+import warnings
+import glob
+from pathlib import Path
+import time
+import datetime as dt
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+import logging
+from logging.handlers import TimedRotatingFileHandler
+import datetime as dt
+from datetime import datetime
+import subprocess
+
+
+
+# In[2]:
+
+
+logger = logging.getLogger(name = '로그모델명')
+logger.setLevel(logging.INFO)
+
+#콘솔 핸들러
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter('\r|%(asctime)s||%(levelname)s|%(message)s',datefmt='%Y-%m-%d %H:%M:%S')
+console_handler.setFormatter(console_formatter)
+
+
+#파일 핸들러
+file_handler = logging.handlers.TimedRotatingFileHandler(
+    filename= (로그파일명+'.log'), 
+    when = "midnight" ,  # W0
+    interval = 1,
+    backupCount= 0 , 
+    #atTime=datetime.time(0, 0, 0)
+    )
+file_handler.setLevel(logging.INFO)
+file_formatter = logging.Formatter('\r|%(asctime)s||%(levelname)s|%(message)s',datefmt='%Y-%m-%d %H:%M:%S')
+file_handler.setFormatter(file_formatter)
+
+#핸들러 추가
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
+
+logger.info("FIL_DIT_Core : Start~!!")
+
+
+# In[3]:
+
+
+class FileSystemEventHandler_LK(FileSystemEventHandler):
+
+    def __init__(self, src_folder, dest_folder):
+        self.src_folder = src_folder
+        self.dest_folder = dest_folder
+        self.new_dir_path = dest_folder
+
+    def on_created(self, event): # 파일 생성시            
+        # logger.info(f'Log event type : {event.event_type} - {event.src_path}')
+        if event.is_directory & (len(os.path.relpath(event.src_path, self.src_folder))==21) :                       
+            logger.info(f'FIL_DIT_Core : Lot폴더 생성{os.path.relpath(event.src_path, self.src_folder)} : {event.event_type} - {event.src_path}')
+            toss_path = os.path.join(self.src_folder,os.path.relpath(event.src_path, self.src_folder))
+            toss_tree_path = os.path.relpath(event.src_path, self.src_folder)
+            subprocess.Popen(['python',r'C:\Users\ptsfi2dl185\FIL2_Image_Deep_Learning\FIL2_DIT2_DL\FIL_DIT2_CopynRunDL.py', toss_path,toss_tree_path])         
+
+
+        
+
+        else : 
+            pass
+        
+    # def on_deleted(self, event):        
+    #     logger.info(f'Log event type : {event.event_type} - {event.src_path}')
+
+    # def on_modified(self, event):
+    #     logger.info(f'Log event type : {event.event_type} - {event.src_path}')
+
+    # def on_moved(self, event): # 파일 이동시        
+    #     logger.info(f'Log event type : {event.event_type} - {event.src_path}')
+
+
+# In[ ]:
+
+
+class Watcher:
+    def __init__(self, directories, event_handlers):
+        self.observers = []
+        for i in range(len(directories)):
+            observer = Observer()
+            observer.schedule(event_handlers[i], directories[i], recursive=True)
+            self.observers.append(observer)
+        self.currentDirectorySetting()
+    def currentDirectorySetting(self):
+        logger.info("FIL_DIT_Core : ======================================================================")
+        logger.info(f"FIL_DIT_Core : 감시중... \n현재 작업 디렉토리:{directories}")        
+        logger.info("FIL_DIT_Core : ======================================================================")   
+
+    def run(self):
+        for observer in self.observers:
+            observer.start()
+        t=0    
+        try:
+            while True:
+                time.sleep(0.5)
+                t+=1
+                if t==600:
+                    logger.info("FIL_DIT_Core : 정상 동작중")
+                    t=0
+                else:
+                    pass
+        except KeyboardInterrupt:
+            logger.info(f"FIL_DIT_Core : 감시 중지...")
+            for observer in self.observers:
+                observer.stop()
+            observer.join()
+
+
+target_path = '모니터링 폴더 위치'
+dest_path = 'D:\\Image_temp'
+
+if __name__ == "__main__":
+    directories = [target_path]#log_path,rsf_path,rsi_path
+    event_handlers = [FileSystemEventHandler_LK(target_path,dest_path)] 
+    w = Watcher(directories, event_handlers)
+    w.run()
+
+
+
+
+
+
