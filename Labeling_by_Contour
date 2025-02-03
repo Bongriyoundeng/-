@@ -1,0 +1,110 @@
+import glob
+import pandas as pd
+import cv2
+import matplotlib.pyplot as plt
+import json
+import numpy as np
+import os
+import sys
+import argparse
+import shutil
+import math
+from collections import OrderedDict
+import random
+import PIL.Image
+from labelme import utils
+from sklearn.model_selection import train_test_split
+
+path = '주소'
+
+imgs = glob.glob(path+'*.jpg')
+
+for img in imgs :
+    img2 = cv2.imread(img)
+    gray = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray,(5,5),0)
+    ret, otsu = cv2.threshold(gray, -1, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)#|cv2.THRESH_OTSU
+    #otsu = cv2.adaptiveThreshold(gray,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,cv2.THRESH_BINARY,15,2)#cv2.adaptiveThreshold(gray,255,cv2.ADAPTIVE_THRESH_MEAN_C,cv2.THRESH_BINARY,15,2)
+    contours, hierarchy = cv2.findContours(otsu, cv2.RETR_CCOMP , cv2.CHAIN_APPROX_NONE)
+    json_path=path + img.split('\\')[-1].replace('jpg','json')
+    with open(json_path, 'r') as file:
+        data = json.load(file)
+    shapes = []
+    for contour in contours:
+        
+        if ((contour.T[0].max()-contour.T[0].min())*(contour.T[1].max()-contour.T[1].min()) < 3600) & (((contour.T[0].max()-contour.T[0].min())*(contour.T[1].max()-contour.T[1].min())) > 1300) & (((contour.T[0].max()-contour.T[0].min())/(contour.T[1].max()-contour.T[1].min())) >0.7)& (((contour.T[0].max()-contour.T[0].min())/(contour.T[1].max()-contour.T[1].min())) < 1.3):
+            points = contour.squeeze().tolist()
+            temp_pt = []
+            for pt in points:
+                temp_pt.append([float(i) for i in pt])
+            points = temp_pt
+            shape = {
+                "label": "DOT",
+                "points": points,
+                "group_id": None,
+                "description": "",
+                "shape_type": "polygon",
+                "flags": {},
+                "mask": None
+                }
+            shapes.append(shape)
+        elif ((contour.T[0].max()-contour.T[0].min())*(contour.T[1].max()-contour.T[1].min()) < 780000) & (((contour.T[0].max()-contour.T[0].min())*(contour.T[1].max()-contour.T[1].min())) > 570025):
+            #
+            points = [[float(contour.T[0].min()),float(contour.T[1].min())],[float(contour.T[0].max()),float(contour.T[1].max())]]
+            temp_pt = []
+            for pt in points:
+                temp_pt.append([float(i) for i in pt])
+            points = temp_pt
+            shape = {
+                "label": "DM",
+                "points": points,
+                "group_id": None,
+                "description": "",
+                "shape_type": "rectangle",
+                "flags": {},
+                "mask": None
+                }
+            shapes.append(shape)
+        elif ((contour.T[0].max()-contour.T[0].min())*(contour.T[1].max()-contour.T[1].min()) > 237600) & (((contour.T[0].max()-contour.T[0].min())*(contour.T[1].max()-contour.T[1].min())) < 302400):
+            #
+            points =  [[float(contour.T[0].min()),float(contour.T[1].min())],[float(contour.T[0].max()),float(contour.T[1].max())]]
+            temp_pt = []
+            for pt in points:
+                temp_pt.append([float(i) for i in pt])
+            points = temp_pt
+            shape = {
+                "label": "DG",
+                "points": points,
+                "group_id": None,
+                "description": "",
+                "shape_type": "rectangle",
+                "flags": {},
+                "mask": None
+                }
+            shapes.append(shape)
+        elif ((contour.T[0].max()-contour.T[0].min())*(contour.T[1].max()-contour.T[1].min()) > 3000000) :
+            #
+            #points = contour.squeeze().tolist()
+            points =  [[float(contour.T[0].min()),float(contour.T[1].min())],[float(contour.T[0].max()),float(contour.T[1].max())]]
+            temp_pt = []
+            for pt in points:
+                temp_pt.append([float(i) for i in pt])
+            points = temp_pt
+            shape = {
+                "label": "DMS",
+                "points": points,
+                "group_id": None,
+                "description": "",
+                "shape_type":"rectangle",
+                "flags": {},
+                "mask": None
+                }
+            shapes.append(shape)
+
+        
+        else:
+            pass
+        
+    data['shapes'] = shapes    
+    with open(json_path, 'w') as file:
+        json.dump(data, file)        
